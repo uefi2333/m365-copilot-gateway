@@ -1,0 +1,58 @@
+# Copy to config.yaml
+
+gateway:
+  host: "127.0.0.1"
+  port: 8080
+  # At least one key required for /v1/*
+  api_keys:
+    - "change-me-to-a-long-random-string"
+  admin_password: "change-me-admin"
+  data_dir: "./data"
+  cors_origins: []
+
+substrate:
+  origin: "https://m365.cloud.microsoft"
+  time_zone: "Asia/Shanghai"
+  # reconnect each turn is more reliable; set true to reuse sockets (experimental)
+  reuse_socket: false
+  request_timeout_sec: 120
+  # dump SignalR frames for reverse-engineering
+  dump_frames: false
+
+token:
+  # refresh when remaining lifetime below this many seconds
+  refresh_skew_sec: 300
+  # prefer CDP silent refresh when browser profile exists
+  prefer_cdp: true
+
+pool:
+  strategy: "round_robin"  # round_robin | sticky | least_load
+  cooldown_sec: 60
+  max_consecutive_errors: 3
+
+tools:
+  # max model↔tool rounds inside one client request
+  max_rounds: 8
+  repair_rounds: 1
+  # client executes tools (recommended)
+  execution: "client"
+  # inject strategies: fenced | json | shell_route
+  strategies:
+    - fenced
+    - shell_route
+
+models:
+  # static seed; runtime may extend after live probe
+  advertise:
+    - id: m365-copilot
+      tone: Magic
+      label: "M365 Copilot (auto)"
+    - id: quick
+      tone: Gpt_Quick
+      label: "Quick"
+    - id: reasoning
+      tone: Gpt_Reasoning
+      label: "Think deeper"
+    - id: claude-sonnet
+      tone: Claude_Sonnet
+      label: "Claude Sonnet tone"

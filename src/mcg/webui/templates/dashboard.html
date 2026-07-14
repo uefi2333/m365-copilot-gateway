@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>M365 Copilot Gateway</title>
+  <style>
+    :root { --bg:#0f1419; --card:#1a2332; --fg:#e7ecf3; --muted:#8b9bb4; --acc:#3d8bfd; --ok:#3dd68c; --bad:#f07178; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: ui-sans-serif, system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+    header { padding:1rem 1.5rem; border-bottom:1px solid #243044; display:flex; justify-content:space-between; align-items:center; }
+    h1 { font-size:1.1rem; margin:0; font-weight:600; }
+    main { max-width:1100px; margin:0 auto; padding:1.25rem; display:grid; gap:1rem; }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:.75rem; }
+    .card { background:var(--card); border:1px solid #243044; border-radius:12px; padding:1rem; }
+    .stat { font-size:1.6rem; font-weight:700; }
+    .muted { color:var(--muted); font-size:.85rem; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th, td { text-align:left; padding:.5rem .4rem; border-bottom:1px solid #243044; vertical-align:top; }
+    input, button, textarea { font: inherit; }
+    input, textarea { width:100%; background:#0d121a; color:var(--fg); border:1px solid #2b3b55; border-radius:8px; padding:.55rem .7rem; }
+    button { background:var(--acc); color:#fff; border:0; border-radius:8px; padding:.55rem .9rem; cursor:pointer; }
+    button.danger { background:var(--bad); }
+    .row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
+    .pill { display:inline-block; padding:.15rem .5rem; border-radius:999px; background:#243044; font-size:.75rem; }
+    .pill.ok { background:#163528; color:var(--ok); }
+    .pill.bad { background:#3a1d22; color:var(--bad); }
+    a { color:var(--acc); }
+    form.inline { display:inline; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>M365 Copilot Gateway</h1>
+  <div class="muted">Substrate reverse proxy · WebUI</div>
+</header>
+<main>
+  <section class="grid">
+    <div class="card"><div class="muted">Accounts</div><div class="stat">{{ accounts|length }}</div></div>
+    <div class="card"><div class="muted">Valid tokens</div><div class="stat">{{ active }}</div></div>
+    <div class="card"><div class="muted">Models</div><div class="stat">{{ models|length }}</div></div>
+    <div class="card"><div class="muted">API</div><div class="muted" style="margin-top:.4rem"><code>/v1/chat/completions</code></div></div>
+  </section>
+
+  {% if not authed %}
+  <section class="card">
+    <h2 style="margin-top:0;font-size:1rem">Admin login</h2>
+    <form method="post" action="/ui/login" class="row">
+      <input type="password" name="password" placeholder="admin password" style="max-width:280px" required />
+      <button type="submit">Login</button>
+    </form>
+    <p class="muted">Uses gateway.admin_password from config. API keys still required for /v1.</p>
+  </section>
+  {% else %}
+  <section class="card">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0;font-size:1rem">Import account (substrate JWT)</h2>
+      <form method="post" action="/ui/logout"><button type="submit">Logout</button></form>
+    </div>
+    <form method="post" action="/ui/import-token" style="margin-top:.75rem;display:grid;gap:.5rem">
+      <input name="label" placeholder="label (optional)" />
+      <textarea name="token" rows="4" placeholder="paste access_token JWT (aud=substrate.office.com)" required></textarea>
+      <div><button type="submit">Import token</button></div>
+    </form>
+    <p class="muted">How to get token: open M365 Copilot in browser → DevTools → Network → WS filter substrate → copy access_token query param. CDP auto-capture comes next.</p>
+  </section>
+  {% endif %}
+
+  <section class="card">
+    <h2 style="margin-top:0;font-size:1rem">Account pool</h2>
+    <table>
+      <thead><tr><th>Label</th><th>Status</th><th>TTL</th><th>Errors</th><th></th></tr></thead>
+      <tbody>
+      {% for a in accounts %}
+        <tr>
+          <td>{{ a.label }}<div class="muted">{{ a.id[:13] }}…</div></td>
+          <td><span class="pill {% if a.token_valid %}ok{% else %}bad{% endif %}">{{ a.status }}</span></td>
+          <td>{{ a.token_ttl_sec }}s</td>
+          <td>{{ a.errors }}</td>
+          <td>
+            {% if authed %}
+            <form class="inline" method="post" action="/ui/delete-account">
+              <input type="hidden" name="account_id" value="{{ a.id }}" />
+              <button class="danger" type="submit">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">No accounts yet. Login and import a token.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-top:0;font-size:1rem">Models</h2>
+    <table>
+      <thead><tr><th>ID</th><th>Tone</th><th>Label</th></tr></thead>
+      <tbody>
+      {% for m in models %}
+        <tr><td><code>{{ m.id }}</code></td><td>{{ m.tone }}</td><td>{{ m.label }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2 style="margin-top:0;font-size:1rem">Recent requests</h2>
+    <table>
+      <thead><tr><th>Time</th><th>Model</th><th>Tone</th><th>Tools</th><th>Account</th></tr></thead>
+      <tbody>
+      {% for l in logs %}
+        <tr>
+          <td class="muted">{{ l.ts }}</td>
+          <td>{{ l.model }}</td>
+          <td>{{ l.tone }}</td>
+          <td>{{ l.tools }}</td>
+          <td class="muted">{{ l.account[:8] }}…</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="muted">No requests yet.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>
