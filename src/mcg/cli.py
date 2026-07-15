@@ -305,11 +305,10 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "accounts":
         for a in pool.list_public():
-            st = fabric.status_dict(a.id)
             print(
-                f"{a.id}\t{a.label}\tenabled={a.enabled}\t"
-                f"valid={st.get('valid')}\tttl={st.get('seconds_remaining')}\t"
-                f"msal={st.get('msal_cache')}\tsource={st.get('source')}"
+                f"{a.get('id')}\t{a.get('label')}\tstatus={a.get('status')}\t"
+                f"valid={a.get('token_valid')}\tttl={a.get('token_ttl_sec')}\t"
+                f"errors={a.get('errors')}"
             )
         return
 
