@@ -41,11 +41,14 @@ def build_tool_preamble(
         lines.append("")
         if "fenced" in strategies:
             lines.append(
-                "When calling a tool, output a fenced block where the info-string is the tool name "
-                "and the body is a single JSON object of arguments. Example:\n"
+                "When calling a tool, output ONLY a fenced block — no prose before or after. "
+                "The info-string is the exact tool name; the body is a single JSON object of arguments. "
+                "Example:\n"
                 "```tool_name\n"
                 '{"arg": "value"}\n'
-                "```"
+                "```\n"
+                "Do not write sentences like \"I need to use the tool\" or \"Clarifying tool usage\". "
+                "Either call the tool with a fence, or answer the user in plain language."
             )
         if "shell_route" in strategies:
             shellish = [

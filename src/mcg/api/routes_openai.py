@@ -18,6 +18,7 @@ from mcg.models_catalog import resolve_tone
 from mcg.models_probe import catalog_snapshot, entries_to_openai, live_probe
 from mcg.multimodal.adapter import substrate_message_extras
 from mcg.substrate.client import SubstrateClient, SubstrateError
+from mcg.tools.stream_filter import StreamToolAccumulator, iter_filtered_stream
 
 router = APIRouter()
 
@@ -124,19 +125,31 @@ async def _local_tool_rounds(
     max_rounds: int,
     tone: str,
 ) -> tuple[str, list]:
-    """Run model → local tools → model until stop or max_rounds."""
+    """Run model → local shell tools → model until stop or max_rounds.
+
+    Non-shell tool_calls are returned to the client (OpenAI protocol) instead of
+    inventing a denial and re-prompting the model.
+    """
     full = await client.chat(tool_loop.augment_prompt(canon), **stream_kwargs)
     parsed = tool_loop.parse(full, canon.tools)
     rounds = 0
     while parsed.tool_calls and rounds < max_rounds:
+        localable = [
+            tc
+            for tc in parsed.tool_calls
+            if local_runner._name_allowed((tc.get("function") or {}).get("name") or "")
+        ]
+        if not localable:
+            # hand off to client (get_current_time / weather / etc.)
+            return parsed.text, parsed.tool_calls
         rounds += 1
-        results = await local_runner.run_all(parsed.tool_calls)
+        results = await local_runner.run_all(localable)
         tool_msgs = local_runner.as_tool_messages(results)
         canon.messages.append(
             CanonicalMessage(
                 role="assistant",
                 content=parsed.text,
-                tool_calls=parsed.tool_calls,
+                tool_calls=localable,
             )
         )
         for tm in tool_msgs:
@@ -238,6 +251,7 @@ async def chat_completions(
             message_extras=msg_extras,
         )
 
+        # local tool loop only for non-stream + shell-capable tools
         use_local = (
             cfg.tools.execution == "local"
             and local_runner is not None
@@ -271,29 +285,37 @@ async def chat_completions(
 
             async def gen():
                 try:
+                    raw_stream = client.chat_stream(prompt, **stream_kwargs)
                     if canon.tools:
-                        chunks: list[str] = []
-                        async for piece in client.chat_stream(prompt, **stream_kwargs):
-                            chunks.append(piece)
-                        full = "".join(chunks)
-                        parsed = tool_loop.parse(full, canon.tools)
-                        tool_holder = list(parsed.tool_calls)
-                        content_out = parsed.text if parsed.tool_calls else full
+                        acc = StreamToolAccumulator(t.name for t in canon.tools)
 
                         async def text_iter():
-                            if content_out:
-                                yield content_out
+                            async for safe in iter_filtered_stream(raw_stream, acc):
+                                yield safe
+
+                        # consume stream into SSE; parse tools after full text known
+                        # stream_openai_chunks needs tool_calls_holder after text ends —
+                        # so we buffer holder via a mutable list filled after iteration.
+                        tool_holder: list = []
+
+                        async def text_then_parse():
+                            async for piece in text_iter():
+                                yield piece
+                            parsed = tool_loop.parse(acc.full, canon.tools)
+                            tool_holder.clear()
+                            tool_holder.extend(parsed.tool_calls)
 
                         async for sse in stream_openai_chunks(
                             model=canon.model,
-                            text_iter=text_iter(),
+                            text_iter=text_then_parse(),
                             tool_calls_holder=tool_holder,
                             conversation_id=sess.conversation_id,
                         ):
                             yield sse
                     else:
+
                         async def text_iter():
-                            async for piece in client.chat_stream(prompt, **stream_kwargs):
+                            async for piece in raw_stream:
                                 yield piece
 
                         async for sse in stream_openai_chunks(
