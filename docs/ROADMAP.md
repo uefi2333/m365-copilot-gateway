@@ -17,9 +17,9 @@
 
 - [x] Lightweight tokens: paste JWT + OAuth refresh_token / device-code (HTTP)
 - [x] CDP browser-login optional (`prefer_cdp: false` by default)
-- [ ] Stream path emits tool_calls chunks cleanly
+- [x] Stream path emits tool_calls chunks cleanly (OpenAI delta index shape)
 - [ ] Anthropic `/v1/messages`
-- [ ] Sticky conversationId across turns
+- [x] Sticky conversationId across turns (`user` / `conversation_id` / account)
 - [ ] Live model probe / capability endpoint
 - [ ] Image/audio adapters
 - [ ] Docker Compose

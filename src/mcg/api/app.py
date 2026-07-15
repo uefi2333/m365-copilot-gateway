@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from mcg.config import AppConfig, load_config
 from mcg.models_catalog import ModelInfo, list_models
 from mcg.pool.store import AccountPool
+from mcg.pool.sessions import SessionStore
 from mcg.token.fabric import TokenFabric
 from mcg.tools.loop import ToolLoop
 
@@ -59,6 +60,7 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     app.state.pool = pool
     app.state.models = models
     app.state.tool_loop = tool_loop
+    app.state.sessions = SessionStore()
     app.state.request_log = []  # ring buffer of recent requests
 
     if cfg.gateway.cors_origins:

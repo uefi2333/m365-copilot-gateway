@@ -26,6 +26,14 @@ def _log(request: Request, entry: dict[str, Any]) -> None:
         del buf[: len(buf) - 200]
 
 
+def _sticky_key(body: OpenAIChatRequest, account_id: str) -> str:
+    if body.conversation_id:
+        return f"c:{body.conversation_id}"
+    if body.user:
+        return f"u:{body.user}:{account_id}"
+    return f"a:{account_id}"
+
+
 @router.get("/v1/models")
 async def list_models(request: Request, _key: str = Depends(require_api_key)):
     models = request.app.state.models
@@ -56,6 +64,7 @@ async def chat_completions(
     pool = request.app.state.pool
     tool_loop = request.app.state.tool_loop
     models = request.app.state.models
+    sessions = request.app.state.sessions
 
     try:
         account = pool.acquire(sticky_key=body.user)
@@ -64,7 +73,6 @@ async def chat_completions(
 
     fabric = request.app.state.fabric
     try:
-        # L0/L1 hot path; L2 CDP only if prefer_cdp and near expiry / missing
         live = await fabric.ensure(
             account.id,
             fallback_token=account.token,
@@ -81,6 +89,15 @@ async def chat_completions(
     tone = resolve_tone(canon.model, models)
     prompt = tool_loop.augment_prompt(canon)
 
+    sticky = _sticky_key(body, account.id)
+    force_new = bool(body.reset_conversation or canon.extra.get("reset_conversation"))
+    sess = sessions.get_or_create(
+        sticky,
+        account_id=account.id,
+        force_new=force_new,
+    )
+    is_start = sess.turns == 0 or force_new
+
     t0 = time.time()
     _log(
         request,
@@ -91,6 +108,9 @@ async def chat_completions(
             "tone": tone,
             "stream": body.stream,
             "tools": len(canon.tools),
+            "sticky": sticky,
+            "conversation_id": sess.conversation_id,
+            "is_start": is_start,
         },
     )
 
@@ -105,43 +125,63 @@ async def chat_completions(
         if body.stream:
 
             async def gen():
+                # Buffer substrate deltas so we can parse tool fences before finishing SSE.
+                # Still stream content chunks immediately; tool deltas follow at end.
                 chunks: list[str] = []
+                tool_holder: list[dict[str, Any]] = []
+                saw_tools = False
 
                 async def text_iter():
+                    nonlocal saw_tools
                     async for piece in client.chat_stream(
                         prompt,
                         tone=tone,
-                        is_start_of_session=True,
+                        conversation_id=sess.conversation_id,
+                        session_id=sess.session_id,
+                        is_start_of_session=is_start,
                     ):
                         chunks.append(piece)
+                        # heuristic: if tools requested, hold back obvious fence mid-stream? no —
+                        # stream all text; parse after close.
                         yield piece
+                    parsed = tool_loop.parse("".join(chunks), canon.tools)
+                    if parsed.tool_calls:
+                        saw_tools = True
+                        tool_holder.extend(parsed.tool_calls)
 
                 try:
-                    async for sse in stream_openai_chunks(model=canon.model, text_iter=text_iter()):
+                    async for sse in stream_openai_chunks(
+                        model=canon.model,
+                        text_iter=text_iter(),
+                        tool_calls_holder=tool_holder,
+                        conversation_id=sess.conversation_id,
+                    ):
                         yield sse
-                    # post-parse tools for non-streaming tool path is better; for stream we
-                    # only stream text. Full tool stream merge comes in next iteration.
-                    full = "".join(chunks)
-                    parsed = tool_loop.parse(full, canon.tools)
-                    if parsed.tool_calls:
-                        # clients that only read stream text won't see tools; dual-path later
-                        pass
                     pool.mark_success(account.id)
+                    sessions.touch(sticky, success=True)
+                    _ = saw_tools
                 except Exception:
                     pool.mark_error(account.id, cooldown=True)
                     raise
 
             return StreamingResponse(gen(), media_type="text/event-stream")
 
-        # non-stream
-        full = await client.chat(prompt, tone=tone, is_start_of_session=True)
+        full = await client.chat(
+            prompt,
+            tone=tone,
+            conversation_id=sess.conversation_id,
+            session_id=sess.session_id,
+            is_start_of_session=is_start,
+        )
         parsed = tool_loop.parse(full, canon.tools)
         pool.mark_success(account.id)
+        sessions.touch(sticky, success=True)
         return JSONResponse(
             final_openai_response(
                 model=canon.model,
                 content=parsed.text if parsed.tool_calls else full,
                 tool_calls=parsed.tool_calls or None,
+                conversation_id=sess.conversation_id,
             )
         )
     except SubstrateError as exc:
