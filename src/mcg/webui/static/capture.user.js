@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         MCG Substrate Token Capture
-// @namespace    https://github.com/uefi233/m365-copilot-gateway
+// @namespace    https://github.com/uefi2333/m365-copilot-gateway
 // @version      1.0.0
 // @description  Capture ChatHub access_token from M365 Copilot / Copilot Studio WS
 // @match        https://m365.cloud.microsoft/*
