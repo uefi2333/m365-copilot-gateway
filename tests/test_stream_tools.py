@@ -3,17 +3,17 @@ from collections.abc import AsyncIterator
 
 import pytest
 
-from mcg.compat.openai_chat import stream_openai_chunks, _openai_tool_call_deltas
+from mcg.compat.canonical import CanonicalTool
+from mcg.compat.openai_chat import _openai_tool_call_deltas, stream_openai_chunks
 from mcg.pool.sessions import SessionStore
 from mcg.tools.loop import parse_tool_calls_from_text
-from mcg.compat.canonical import CanonicalTool
 
 
 @pytest.mark.asyncio
 async def test_stream_emits_openai_tool_call_shape():
     async def text() -> AsyncIterator[str]:
-        yield "I will call a tool.\n"
-        yield "```bash\necho hi\n```"
+        # cleaned content only (route strips fence before streaming when tools)
+        yield "I will run it."
 
     tools = [
         {
@@ -22,18 +22,12 @@ async def test_stream_emits_openai_tool_call_shape():
             "function": {"name": "bash", "arguments": json.dumps({"command": "echo hi"})},
         }
     ]
-    # simulate holder filled after text — stream_openai_chunks reads holder after iter
-    holder = []
-
-    async def wrapped() -> AsyncIterator[str]:
-        async for p in text():
-            yield p
-        holder.extend(tools)
+    holder = list(tools)
 
     chunks: list[dict] = []
     async for line in stream_openai_chunks(
         model="m365-copilot",
-        text_iter=wrapped(),
+        text_iter=text(),
         tool_calls_holder=holder,
         conversation_id="conv-1",
     ):
@@ -45,7 +39,6 @@ async def test_stream_emits_openai_tool_call_shape():
 
     finishes = [c["choices"][0]["finish_reason"] for c in chunks]
     assert "tool_calls" in finishes
-    # at least one delta with tool_calls index
     tool_deltas = [
         c["choices"][0]["delta"].get("tool_calls")
         for c in chunks
@@ -55,6 +48,14 @@ async def test_stream_emits_openai_tool_call_shape():
     first = tool_deltas[0][0]
     assert first["index"] == 0
     assert first.get("id") == "call_abc" or first.get("function", {}).get("name") == "bash"
+
+    contents = [
+        c["choices"][0]["delta"].get("content")
+        for c in chunks
+        if c["choices"][0]["delta"].get("content")
+    ]
+    assert any("I will run it" in (c or "") for c in contents)
+    assert not any("```" in (c or "") for c in contents)
 
 
 def test_tool_delta_split():
@@ -72,11 +73,31 @@ def test_tool_delta_split():
     assert frags[1]["function"]["arguments"] == '{"command":"ls"}'
 
 
-def test_parse_fence_bash():
+def test_parse_fence_bash_uses_command():
     tools = [CanonicalTool(name="bash", description="run", parameters={})]
-    p = parse_tool_calls_from_text("```bash\npwd\n```", tools)
+    p = parse_tool_calls_from_text("```bash\necho hello-mcg\n```", tools)
     assert p.tool_calls
     assert p.tool_calls[0]["function"]["name"] == "bash"
+    args = json.loads(p.tool_calls[0]["function"]["arguments"])
+    assert args == {"command": "echo hello-mcg"}
+    assert p.text == ""
+
+
+def test_parse_fence_named_bash_json_input_normalized():
+    tools = [CanonicalTool(name="bash", description="run", parameters={})]
+    p = parse_tool_calls_from_text('```bash\n{"input": "pwd"}\n```', tools)
+    args = json.loads(p.tool_calls[0]["function"]["arguments"])
+    assert args["command"] == "pwd"
+
+
+def test_parse_json_tool_calls_weather():
+    tools = [CanonicalTool(name="get_weather", description="", parameters={})]
+    raw = '{"tool_calls":[{"name":"get_weather","arguments":{"city":"Tokyo"}}]}'
+    p = parse_tool_calls_from_text(raw, tools)
+    assert len(p.tool_calls) == 1
+    args = json.loads(p.tool_calls[0]["function"]["arguments"])
+    assert args["city"] == "Tokyo"
+    assert p.text == ""
 
 
 def test_session_sticky():
