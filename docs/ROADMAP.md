@@ -15,7 +15,8 @@
 
 ## Next
 
-- [x] CDP silent token refresh / semi-auto browser-login
+- [x] Lightweight tokens: paste JWT + OAuth refresh_token / device-code (HTTP)
+- [x] CDP browser-login optional (`prefer_cdp: false` by default)
 - [ ] Stream path emits tool_calls chunks cleanly
 - [ ] Anthropic `/v1/messages`
 - [ ] Sticky conversationId across turns

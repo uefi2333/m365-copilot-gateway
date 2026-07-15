@@ -27,11 +27,17 @@ class SubstrateConfig(BaseModel):
 
 class TokenConfig(BaseModel):
     refresh_skew_sec: int = 300
-    prefer_cdp: bool = True
+    # default OFF — no Chrome required
+    prefer_cdp: bool = False
     cdp_port: int = 9222
     cdp_timeout_sec: float = 120.0
     browser_binary: str | None = None
     headless: bool = False
+    # pure HTTP OAuth (refresh_token / device_code)
+    oauth_client_id: str | None = None
+    oauth_tenant: str = "common"
+    oauth_scope: str = "https://substrate.office.com/ows/.default offline_access openid profile"
+    oauth_client_secret: str | None = None
 
 
 class PoolConfig(BaseModel):

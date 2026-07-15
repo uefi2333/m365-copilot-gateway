@@ -94,11 +94,12 @@ Tools are taken **only from the inbound request** — no server-side tool regist
 
 Tool execution: **client-executed by default** (gateway emits `tool_calls`; client runs tools and posts results). Optional local executors are off by default.
 
-## Account pool & import
+## Account pool & import (no Chrome required)
 
-1. **Paste token** — JWT with `aud` starting `https://substrate.office.com/`
-2. **Browser semi-auto (CDP)** — `mcg browser-login` or WebUI button; dedicated profile + ChatHub `access_token` capture (see [docs/TOKEN_CDP.md](docs/TOKEN_CDP.md))
-3. **Refresh** — `mcg refresh-token <oid>` reuses profile cookies
+1. **Paste JWT** — `mcg import-token -` (`aud` = `substrate.office.com`)
+2. **Silent HTTP renew** — store `refresh_token` + set `token.oauth_client_id`
+3. **Device code** — `mcg device-login` (open URL on phone)
+4. **Optional CDP** — only if `prefer_cdp: true` (see [docs/TOKEN_CDP.md](docs/TOKEN_CDP.md))
 
 Pool policies: round-robin, sticky session key, cooldown on 429/Disengaged, per-account daily caps (optional).
 

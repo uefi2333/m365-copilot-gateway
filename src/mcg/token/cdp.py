@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 
+
 """CDP / browser token capture for Substrate JWT.
 
 L2 path: attach to Chrome/Edge remote-debugging, open M365 Copilot, snatch

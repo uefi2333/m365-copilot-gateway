@@ -30,6 +30,10 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
         cdp_timeout_sec=cfg.token.cdp_timeout_sec,
         browser_binary=cfg.token.browser_binary,
         headless=cfg.token.headless,
+        oauth_client_id=cfg.token.oauth_client_id,
+        oauth_tenant=cfg.token.oauth_tenant,
+        oauth_scope=cfg.token.oauth_scope,
+        oauth_client_secret=cfg.token.oauth_client_secret,
     )
     pool = AccountPool(
         data_dir,

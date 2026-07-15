@@ -1,49 +1,61 @@
-# Token acquisition — CDP semi-auto
+# Token acquisition (lightweight first)
 
-## Paths (fastest first)
+## Default path — no Chrome
 
-| Level | Source | When |
-|-------|--------|------|
-| L0 | Memory hot cache | Every request |
-| L1 | `data/tokens/<oid>.jwt` | Restart |
-| L2 | **CDP browser capture** | Near expiry / missing / first login |
-| L3 | Manual paste | Fallback |
+| Level | Source | Needs |
+|-------|--------|--------|
+| L0 | Memory | — |
+| L1 | `data/tokens/<oid>.jwt` | paste once |
+| **L1.5** | **OAuth `refresh_token` (HTTP)** | `oauth_client_id` + stored RT |
+| L2 | CDP Chrome (optional) | `prefer_cdp: true` + browser |
+| L3 | Manual paste / device-code | phone browser OK |
 
-## CLI
+### 1) Paste access JWT (simplest)
 
 ```bash
-# First login (opens dedicated browser profile under data/browser-profiles/)
-mcg browser-login --label alice
+# DevTools → Network → WS `substrate.office.com` → copy access_token=
+echo 'eyJ...' | mcg import-token - --label alice
 
-# Attach already-running Chrome with --remote-debugging-port=9222
-mcg browser-login --cdp http://127.0.0.1:9222 --label alice
+# optional: also store refresh_token for silent renew
+mcg import-token token.jwt --label alice --refresh-token rt.txt
+mcg set-refresh-token <oid> rt.txt
+```
 
-# Refresh existing account using saved profile cookies
+### 2) Silent renew (HTTP only)
+
+```yaml
+# config.yaml
+token:
+  prefer_cdp: false
+  oauth_client_id: "<your-entra-app-client-id>"
+  oauth_tenant: "common"   # or your tenant id
+  oauth_scope: "https://substrate.office.com/ows/.default offline_access openid profile"
+```
+
+```bash
 mcg refresh-token <oid>
 ```
 
-## WebUI
+Gateway `fabric.ensure()` uses refresh_token automatically when access JWT is near expiry.
 
-Admin login → **Start browser capture** (blocks until JWT or timeout).
+> Your Entra app must be allowed to request the substrate resource. Many personal setups just paste a fresh JWT periodically if app registration is not available.
 
-## Admin API
+### 3) Device code (still no local Chrome)
 
-```http
-POST /admin/accounts/browser-login
-Authorization: Bearer <api-key>
-Content-Type: application/json
-
-{"admin_password":"...","label":"alice","interactive":true}
+```bash
+mcg device-login --label alice
+# print verification_uri + user_code → open on phone
 ```
 
-## Requirements
+### 4) Optional CDP (heavy)
 
-- Chromium / Chrome / Edge installed (`MCG_BROWSER` or auto-detect)
-- Display for first MFA login (or attach remote CDP)
-- Isolated `--user-data-dir` — never hijacks your daily browser profile
+```yaml
+token:
+  prefer_cdp: true
+```
 
-## Security
+```bash
+mcg browser-login --label alice
+```
 
-- Profiles and JWTs live under `data_dir` with mode 0600 where possible
-- Gateway still requires API keys for `/v1`
-- Do not expose CDP port (`9222`) to the public internet
+Requires Chrome/Edge binary. Not recommended for servers.
