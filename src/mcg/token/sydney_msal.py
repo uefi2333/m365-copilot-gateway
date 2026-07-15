@@ -153,38 +153,43 @@ class SydneyMsal:
         return None
 
     def start_pkce(self) -> PkceStart:
-        verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
-        challenge = (
-            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest())
-            .rstrip(b"=")
-            .decode()
+        """Build authorize URL via MSAL initiate_auth_code_flow (cramt-equivalent).
+
+        Persist:
+          - data/msal/pkce_pending.json  (full MSAL flow + verifier)
+          - data/msal/last_auth_url.txt  (open this; do not trust chat-mangled links)
+        Chat apps often corrupt %2F → AADSTS70011 (https:%F/...).
+        """
+        app, _cache = self._app()
+        flow = app.initiate_auth_code_flow(
+            scopes=self.scopes,
+            redirect_uri=self.redirect_uri,
+            response_mode="query",
         )
-        state = secrets.token_urlsafe(16)
-        params = {
-            "client_id": self.client_id,
-            "response_type": "code",
-            "redirect_uri": self.redirect_uri,
-            "scope": " ".join(self.scopes),
-            "response_mode": "query",
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-            "state": state,
-        }
-        auth_url = (
-            f"{self.authority.rstrip('/')}/oauth2/v2.0/authorize?"
-            + urllib.parse.urlencode(params)
-        )
+        auth_url = flow.get("auth_uri") or flow.get("auth_url")
+        if not auth_url:
+            raise SydneyAuthError(f"MSAL did not return auth_uri: {flow}")
+        verifier = flow.get("code_verifier") or ""
+        state = flow.get("state") or ""
         pending = {
+            "msal_flow": flow,
             "code_verifier": verifier,
             "state": state,
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "scopes": self.scopes,
             "created_at": int(time.time()),
+            "auth_url": auth_url,
         }
-        _pkce_pending_path(self.data_dir).write_text(
-            json.dumps(pending, indent=2), encoding="utf-8"
-        )
+        pending_path = _pkce_pending_path(self.data_dir)
+        pending_path.write_text(json.dumps(pending, indent=2), encoding="utf-8")
+        url_path = self.data_dir / "msal" / "last_auth_url.txt"
+        url_path.write_text(auth_url + "\n", encoding="utf-8")
+        try:
+            url_path.chmod(0o600)
+            pending_path.chmod(0o600)
+        except OSError:
+            pass
         return PkceStart(
             auth_url=auth_url,
             code_verifier=verifier,
@@ -203,22 +208,59 @@ class SydneyMsal:
     ) -> TokenBundle:
         """Exchange auth code (or full redirect URL containing code=)."""
         raw = code_or_url.strip()
-        code = raw
-        if "code=" in raw or raw.startswith("http"):
-            parsed = urllib.parse.urlparse(raw)
-            qs = urllib.parse.parse_qs(parsed.query)
-            code = (qs.get("code") or [None])[0]
-            if not code:
-                frag = urllib.parse.parse_qs(parsed.fragment)
-                code = (frag.get("code") or [None])[0]
+        auth_response: dict[str, str] = {}
+        if "code=" in raw or raw.startswith("http") or "?" in raw:
+            parsed = urllib.parse.urlparse(raw if "://" in raw else ("https://x/?" + raw.lstrip("?")))
+            qs = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.query).items() if v}
+            if not qs and parsed.fragment:
+                qs = {k: v[0] for k, v in urllib.parse.parse_qs(parsed.fragment).items() if v}
+            auth_response = qs
+            code = qs.get("code")
+        else:
+            code = raw
+            auth_response = {"code": code}
+
         if not code:
             raise SydneyAuthError("no authorization code in input")
 
         pending_path = _pkce_pending_path(self.data_dir)
-        verifier = code_verifier
-        if not verifier and pending_path.exists():
+        pending: dict[str, Any] = {}
+        if pending_path.exists():
             pending = json.loads(pending_path.read_text(encoding="utf-8"))
-            verifier = pending.get("code_verifier")
+
+        # Preferred: MSAL auth-code flow (keeps cache coherent)
+        msal_flow = pending.get("msal_flow")
+        if msal_flow and auth_response.get("code"):
+            app, cache = self._app()
+            # MSAL expects state match when present
+            if "state" not in auth_response and msal_flow.get("state"):
+                auth_response = {**auth_response, "state": msal_flow["state"]}
+            result = app.acquire_token_by_auth_code_flow(msal_flow, auth_response)
+            self._save(cache)
+            if result and result.get("access_token"):
+                if pending_path.exists():
+                    try:
+                        pending_path.unlink()
+                    except OSError:
+                        pass
+                # keep sidecar RT if present
+                if result.get("refresh_token"):
+                    self._ingest_into_msal_cache(result)
+                return TokenBundle(
+                    access_token=result["access_token"],
+                    refresh_token=result.get("refresh_token"),
+                    expires_in=int(result.get("expires_in") or 0),
+                    source="msal-auth-code-flow",
+                    raw=result,
+                )
+            err = (result or {}).get("error_description") or (result or {}).get("error")
+            if err:
+                # fall through to raw HTTP with stored verifier
+                pass
+
+        verifier = code_verifier or pending.get("code_verifier")
+        if not verifier and msal_flow:
+            verifier = msal_flow.get("code_verifier")
         if not verifier:
             raise SydneyAuthError("missing code_verifier — run pkce start first")
 
@@ -242,7 +284,6 @@ class SydneyMsal:
             err = body.get("error_description") or body.get("error") or r.text[:300]
             raise SydneyAuthError(f"code exchange failed: {err}")
 
-        # Seed MSAL cache so silent refresh works next time
         self._ingest_into_msal_cache(body)
         if pending_path.exists():
             try:
@@ -257,7 +298,8 @@ class SydneyMsal:
             raw=body,
         )
 
-    def _ingest_into_msal_cache(self, token_response: dict[str, Any]) -> None:
+    def _ingest_into_msal_cache(
+self, token_response: dict[str, Any]) -> None:
         """Best-effort: store RT/AT so acquire_token_silent works later."""
         try:
             msal = _require_msal()

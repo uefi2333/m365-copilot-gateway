@@ -122,7 +122,12 @@ def main(argv: list[str] | None = None) -> None:
             print(f"client_id: {info['client_id']}")
             print(f"account_key: {account_id}")
             print()
-            print("1) Open this URL in a browser and sign in:")
+            print("IMPORTANT: Do NOT open a URL pasted through chat apps — they corrupt %2F")
+            print("and trigger AADSTS70011. Prefer opening the local file or WebUI link.")
+            url_file = data_dir / "msal" / "last_auth_url.txt"
+            print(f"auth_url_file: {url_file}")
+            print()
+            print("1) Open the auth URL (from file above, or the line below) in a browser:")
             print(info["auth_url"])
             print()
             print("2) After login, copy the URL that contains oauth2/nativeclient?code=...")
@@ -130,7 +135,10 @@ def main(argv: list[str] | None = None) -> None:
             print("    address bar or DevTools Network → request URL)")
             print()
             print("3) Finish:")
-            print(f'   mcg login --id {account_id} --finish "PASTE_URL_HERE" --label "{args.label or "me"}"')
+            print(
+                f'   mcg -c {args.config} login --id {account_id} '
+                f'--finish "PASTE_URL_HERE" --label "{args.label or "me"}"'
+            )
             return
 
         st = asyncio.run(
