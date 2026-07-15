@@ -67,7 +67,21 @@ def build_tool_preamble(
                 'Alternatively emit a single JSON line: '
                 '{"tool_calls":[{"name":"...","arguments":{...}}]}'
             )
-        lines.append("If no tool is needed, answer the user normally without tool fences.")
+        lines.append(
+            "CRITICAL protocol rules:\n"
+            "1) Tool names above are the ONLY tools that exist this turn. "
+            "Never invent skills like docx/pdfs/slides/spreadsheets or claim a tool is missing "
+            "if it is listed above.\n"
+            "2) If the user asks to use a tool / read a skill / run a command, you MUST emit a tool call "
+            "in one of the formats above. Do not narrate tool usage in prose.\n"
+            "3) If no tool is needed, answer normally without tool fences."
+        )
+        # always advertise JSON form as fallback (reasoning models ignore fences)
+        if "json" not in strategies:
+            lines.append(
+                'Fallback format if fences fail: '
+                '{"tool_calls":[{"name":"EXACT_TOOL_NAME","arguments":{...}}]}'
+            )
 
     return "\n".join(lines)
 

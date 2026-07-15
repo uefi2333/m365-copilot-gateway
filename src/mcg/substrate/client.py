@@ -161,7 +161,10 @@ class SubstrateClient:
                                         yield emit
                                     break
                 if t == 2:
-                    item_msgs = (msg.get("item") or {}).get("messages") or []
+                    # Completion payload — fold final text then end immediately.
+                    # Waiting for type 3 adds multi-second "last char freeze" for clients.
+                    item = msg.get("item") or {}
+                    item_msgs = item.get("messages") or []
                     for entry in reversed(item_msgs):
                         if isinstance(entry, dict) and entry.get("author") != "user":
                             text = entry.get("text")
@@ -170,5 +173,6 @@ class SubstrateClient:
                                 if emit:
                                     yield emit
                             break
+                    return
                 if t == 3:
                     return

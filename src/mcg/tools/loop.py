@@ -144,6 +144,64 @@ def parse_tool_calls_from_text(text: str, tools: list[CanonicalTool]) -> ParsedT
             except json.JSONDecodeError:
                 pass
 
+    # OpenAI-ish single object: {"name":"...","arguments":{...}}
+    if not found:
+        for m in re.finditer(
+            r'\{\s*"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*(\{.*?\}|\[.*?\]|"[^"]*")\s*\}',
+            text,
+            re.DOTALL,
+        ):
+            name = m.group(1)
+            if name not in names:
+                continue
+            raw_args = m.group(2)
+            try:
+                args_obj = json.loads(raw_args)
+            except json.JSONDecodeError:
+                args_obj = {"input": raw_args.strip('"')}
+            if isinstance(args_obj, dict) and _is_shell_tool_name(name):
+                args_obj = _normalize_shell_args(args_obj)
+            found.append(_make_call(name, args_obj if isinstance(args_obj, dict) else {"input": str(args_obj)}))
+            residual = residual.replace(m.group(0), "")
+
+    # XML-ish: <tool_call name="x">{"a":1}</tool_call> or <x>{"a":1}</x>
+    if not found:
+        for name in names:
+            for pat in (
+                rf'<tool_call\s+name=["\']{re.escape(name)}["\']\s*>(.*?)</tool_call>',
+                rf'<{re.escape(name)}\s*>(.*?)</{re.escape(name)}>',
+            ):
+                m = re.search(pat, text, re.DOTALL | re.IGNORECASE)
+                if not m:
+                    continue
+                body = m.group(1).strip()
+                arguments = _args_for_fence_body(name, body)
+                found.append(_make_call(name, arguments))
+                residual = residual.replace(m.group(0), "")
+                break
+
+    # Bare: TOOL_NAME then JSON object (reasoning models sometimes drop fences)
+    if not found:
+        for name in sorted(names, key=len, reverse=True):
+            # optional junk prefix like "Hide" glued to name
+            m = re.search(
+                rf'(?:^|\n)\s*(?:[A-Za-z]{{0,12}})?{re.escape(name)}\s*\n\s*(\{{[\s\S]*?\}})\s*(?:```)?',
+                text,
+            )
+            if not m:
+                # same line: name {"a":1}
+                m = re.search(
+                    rf'(?:^|\n)\s*(?:[A-Za-z]{{0,12}})?{re.escape(name)}\s*(\{{[\s\S]*?\}})',
+                    text,
+                )
+            if not m:
+                continue
+            body = m.group(1).strip()
+            arguments = _args_for_fence_body(name, body)
+            found.append(_make_call(name, arguments))
+            residual = residual.replace(m.group(0), "")
+            break
+
     clean = residual.strip()
     return ParsedTools(text=clean, tool_calls=found)
 

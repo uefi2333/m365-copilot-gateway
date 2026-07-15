@@ -19,6 +19,7 @@ from mcg.models_probe import catalog_snapshot, entries_to_openai, live_probe
 from mcg.multimodal.adapter import substrate_message_extras
 from mcg.substrate.client import SubstrateClient, SubstrateError
 from mcg.tools.stream_filter import StreamToolAccumulator, iter_filtered_stream
+from mcg.tools.repair import maybe_repair_tool_call
 
 router = APIRouter()
 
@@ -287,27 +288,34 @@ async def chat_completions(
                 try:
                     raw_stream = client.chat_stream(prompt, **stream_kwargs)
                     if canon.tools:
+                        # Buffer while tools are declared so we can:
+                        # 1) strip fences / run repair
+                        # 2) emit EITHER content OR tool_calls (not narrate then tools)
                         acc = StreamToolAccumulator(t.name for t in canon.tools)
+                        async for piece in raw_stream:
+                            acc.feed(piece)  # accumulate; ignore safe content for now
+                        acc.flush()
+                        parsed = await maybe_repair_tool_call(
+                            client=client,
+                            tool_loop=tool_loop,
+                            canon=canon,
+                            stream_kwargs=stream_kwargs,
+                            full_text=acc.full,
+                            repair_rounds=cfg.tools.repair_rounds,
+                        )
+                        tool_holder: list = list(parsed.tool_calls)
 
-                        async def text_iter():
-                            async for safe in iter_filtered_stream(raw_stream, acc):
-                                yield safe
-
-                        # consume stream into SSE; parse tools after full text known
-                        # stream_openai_chunks needs tool_calls_holder after text ends —
-                        # so we buffer holder via a mutable list filled after iteration.
-                        tool_holder: list = []
-
-                        async def text_then_parse():
-                            async for piece in text_iter():
-                                yield piece
-                            parsed = tool_loop.parse(acc.full, canon.tools)
-                            tool_holder.clear()
-                            tool_holder.extend(parsed.tool_calls)
+                        async def text_out():
+                            if tool_holder:
+                                return
+                            # no tool call — stream residual clean text as one chunk
+                            text = (parsed.text or acc.full or "").strip()
+                            if text:
+                                yield text
 
                         async for sse in stream_openai_chunks(
                             model=canon.model,
-                            text_iter=text_then_parse(),
+                            text_iter=text_out(),
                             tool_calls_holder=tool_holder,
                             conversation_id=sess.conversation_id,
                         ):
@@ -335,7 +343,14 @@ async def chat_completions(
             return StreamingResponse(gen(), media_type="text/event-stream")
 
         full = await client.chat(prompt, **stream_kwargs)
-        parsed = tool_loop.parse(full, canon.tools)
+        parsed = await maybe_repair_tool_call(
+            client=client,
+            tool_loop=tool_loop,
+            canon=canon,
+            stream_kwargs=stream_kwargs,
+            full_text=full,
+            repair_rounds=cfg.tools.repair_rounds,
+        )
         pool.mark_success(account.id)
         sessions.touch(sticky, success=True)
         return JSONResponse(

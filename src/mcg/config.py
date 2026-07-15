@@ -64,7 +64,9 @@ class ToolsConfig(BaseModel):
     max_rounds: int = 8
     repair_rounds: int = 1
     execution: Literal["client", "local"] = "client"
-    strategies: list[str] = Field(default_factory=lambda: ["fenced", "shell_route"])
+    strategies: list[str] = Field(
+        default_factory=lambda: ["fenced", "shell_route", "json"]
+    )
     # local runner
     local_timeout_sec: float = 30.0
     local_max_output_bytes: int = 32000
