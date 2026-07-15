@@ -4,586 +4,368 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>MCG</title>
-  <style>
-    :root {
-      --bg: #0b0d10;
-      --panel: #12151a;
-      --line: #1e2430;
-      --text: #e8eaed;
-      --dim: #8b93a7;
-      --accent: #5b8def;
-      --good: #34c759;
-      --bad: #ff5c5c;
-      --warn: #f0b429;
-      --radius: 10px;
-      --font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
-      --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
-    }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0;
-      min-height: 100vh;
-      background: var(--bg);
-      color: var(--text);
-      font: 14px/1.5 var(--font);
-      -webkit-font-smoothing: antialiased;
-    }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    header {
-      height: 56px;
-      border-bottom: 1px solid var(--line);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 28px;
-      background: rgba(18, 21, 26, 0.9);
-      backdrop-filter: blur(8px);
-      position: sticky;
-      top: 0;
-      z-index: 20;
-    }
-    .brand {
-      display: flex;
-      align-items: baseline;
-      gap: 10px;
-      font-weight: 600;
-      letter-spacing: 0.02em;
-    }
-    .brand span { color: var(--dim); font-weight: 400; font-size: 12px; }
-    main {
-      max-width: 1120px;
-      margin: 0 auto;
-      padding: 28px 20px 64px;
-      display: grid;
-      gap: 18px;
-    }
-    .metrics {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 12px;
-    }
-    @media (max-width: 800px) {
-      .metrics { grid-template-columns: repeat(2, 1fr); }
-    }
-    .metric, .panel {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
-    }
-    .metric { padding: 16px 18px; }
-    .metric .k { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
-    .metric .v { font-size: 28px; font-weight: 600; margin-top: 6px; letter-spacing: -0.02em; }
-    .panel { padding: 18px 20px; }
-    .panel h2 {
-      margin: 0 0 14px;
-      font-size: 13px;
-      font-weight: 600;
-      letter-spacing: 0.04em;
-      text-transform: uppercase;
-      color: var(--dim);
-    }
-    .tabs {
-      display: flex;
-      gap: 4px;
-      border-bottom: 1px solid var(--line);
-      margin: -6px 0 16px;
-      flex-wrap: wrap;
-    }
-    .tab {
-      background: transparent;
-      border: 0;
-      color: var(--dim);
-      padding: 10px 14px;
-      cursor: pointer;
-      border-bottom: 2px solid transparent;
-      font: inherit;
-    }
-    .tab.active {
-      color: var(--text);
-      border-bottom-color: var(--accent);
-    }
-    .tab-panel { display: none; }
-    .tab-panel.active { display: block; }
-    label {
-      display: block;
-      font-size: 12px;
-      color: var(--dim);
-      margin-bottom: 6px;
-    }
-    input, textarea, select {
-      width: 100%;
-      background: #0b0d10;
-      color: var(--text);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 10px 12px;
-      font: inherit;
-      outline: none;
-    }
-    input:focus, textarea:focus { border-color: #3a4a68; }
-    textarea { min-height: 96px; resize: vertical; font-family: var(--mono); font-size: 12px; }
-    .field { margin-bottom: 12px; }
-    .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-    .btn {
-      appearance: none;
-      border: 0;
-      border-radius: 8px;
-      padding: 9px 14px;
-      font: inherit;
-      font-weight: 500;
-      cursor: pointer;
-      background: var(--accent);
-      color: #fff;
-    }
-    .btn:hover { filter: brightness(1.06); }
-    .btn.ghost {
-      background: transparent;
-      color: var(--text);
-      border: 1px solid var(--line);
-    }
-    .btn.danger { background: #3a1a1a; color: var(--bad); border: 1px solid #5a2a2a; }
-    .btn.sm { padding: 6px 10px; font-size: 12px; }
-    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    table { width: 100%; border-collapse: collapse; }
-    th {
-      text-align: left;
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: 0.05em;
-      color: var(--dim);
-      font-weight: 500;
-      padding: 8px 6px;
-      border-bottom: 1px solid var(--line);
-    }
-    td {
-      padding: 12px 6px;
-      border-bottom: 1px solid var(--line);
-      vertical-align: middle;
-    }
-    tr:last-child td { border-bottom: 0; }
-    .mono { font-family: var(--mono); font-size: 12px; }
-    .dim { color: var(--dim); }
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      padding: 2px 8px;
-      border-radius: 999px;
-      font-size: 12px;
-      background: #1a1f28;
-      color: var(--dim);
-    }
-    .pill::before {
-      content: "";
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: currentColor;
-    }
-    .pill.ok { color: var(--good); background: rgba(52, 199, 89, 0.1); }
-    .pill.bad { color: var(--bad); background: rgba(255, 92, 92, 0.1); }
-    .flash {
-      padding: 10px 14px;
-      border-radius: 8px;
-      border: 1px solid var(--line);
-      background: #151a22;
-      font-size: 13px;
-    }
-    .flash.ok { border-color: rgba(52, 199, 89, 0.35); color: var(--good); }
-    .flash.err { border-color: rgba(255, 92, 92, 0.35); color: var(--bad); }
-    .hint {
-      font-size: 12px;
-      color: var(--dim);
-      margin: 8px 0 0;
-      line-height: 1.55;
-    }
-    .codebox {
-      background: #0b0d10;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px;
-      font-family: var(--mono);
-      font-size: 11px;
-      word-break: break-all;
-      max-height: 120px;
-      overflow: auto;
-      color: #c9d1e0;
-    }
-    .split {
-      display: grid;
-      grid-template-columns: 1.2fr 0.8fr;
-      gap: 14px;
-    }
-    @media (max-width: 900px) {
-      .split { grid-template-columns: 1fr; }
-    }
-    .steps { margin: 0; padding-left: 18px; color: var(--dim); font-size: 13px; }
-    .steps li { margin: 6px 0; }
-    .login-box {
-      max-width: 360px;
-      margin: 40px auto;
-    }
-    .setup-card {
-      border-color: rgba(91, 141, 239, 0.35);
-      background: linear-gradient(180deg, #141a24 0%, var(--panel) 100%);
-    }
-    .setup-card ol { margin: 0; padding-left: 18px; }
-    .setup-card li { margin: 8px 0; color: var(--text); font-size: 13px; }
-    .setup-card code, .setup-card .mono { color: #9ec1ff; }
-    .copy-row { display: flex; gap: 8px; align-items: stretch; margin-top: 10px; }
-    .copy-row input { flex: 1; }
-    footer {
-      text-align: center;
-      color: var(--dim);
-      font-size: 12px;
-      padding: 8px;
-    }
-  </style>
+  <link rel="stylesheet" href="/static/app.css" />
 </head>
 <body>
-<header>
-  <div class="brand">MCG <span>M365 Copilot Gateway</span></div>
-  <div class="row">
-    {% if authed %}
-    <a href="/ui/settings" class="btn ghost sm" style="margin-right:8px">设置</a>
-    <form method="post" action="/ui/logout"><button class="btn ghost sm" type="submit">退出</button></form>
-    {% endif %}
-  </div>
-</header>
-
-<main>
-  {% if ok %}
-  <div class="flash ok">{{ ok_text or ('完成 · ' ~ ok) }}</div>
-  {% endif %}
-  {% if err %}
-  <div class="flash err">{{ err_text or ('失败 · ' ~ err) }}{% if msg %} — {{ msg }}{% endif %}</div>
-  {% endif %}
-
-  <section class="metrics">
-    <div class="metric"><div class="k">账号</div><div class="v">{{ accounts|length }}</div></div>
-    <div class="metric"><div class="k">有效令牌</div><div class="v">{{ active }}</div></div>
-    <div class="metric"><div class="k">模型</div><div class="v">{{ models|length }}</div></div>
-    <div class="metric"><div class="k">端点</div><div class="v" style="font-size:14px;margin-top:12px;font-family:var(--mono)">/v1/chat/completions</div></div>
-  </section>
-
-  {% if authed and accounts|length == 0 %}
-  <section class="panel setup-card">
-    <h2>首次接入</h2>
-    <ol>
-      <li>用下方 <strong>PKCE 登录</strong>（推荐）或粘贴 substrate JWT</li>
-      <li>账号出现在「账号池」且状态为有效</li>
-      <li>客户端 Base URL：<span class="mono">{{ base_url }}/v1</span>，API Key 用 config 里的 <span class="mono">gateway.api_keys</span></li>
-      <li>自检：<span class="mono">curl -s {{ base_url }}/health</span></li>
-    </ol>
-    <p class="hint">需要已开通 Microsoft 365 Copilot 的企业账号。令牌仅存本机 <span class="mono">data/</span>。</p>
-  </section>
-  {% endif %}
-
-  {% if authed %}
-  <section class="panel">
-    <h2>客户端接入</h2>
-    <div class="field">
-      <label>Base URL</label>
-      <div class="copy-row">
-        <input id="base-url" class="mono" readonly value="{{ base_url }}/v1" />
-        <button type="button" class="btn ghost sm" data-copy="base-url">复制</button>
+  <header class="top">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <div>
+        <strong>MCG</strong>
+        <span class="sub"> · gateway</span>
       </div>
     </div>
-    <div class="field">
-      <label>示例（OpenAI SDK / curl）</label>
-      <div class="codebox" id="curl-ex">curl {{ base_url }}/v1/models -H "Authorization: Bearer &lt;api_key&gt;"</div>
-    </div>
-    <p class="hint">Open WebUI / Cursor / Claude Code / Codex：把 Base URL 指到上面，模型填 <span class="mono">m365-copilot</span> 或 GET /v1/models 列表中的 id。</p>
-  </section>
-  {% endif %}
-
-  {% if not authed %}
-  <section class="panel login-box">
-    <h2>管理登录</h2>
-    <form method="post" action="/ui/login">
-      <div class="field">
-        <label for="password">Admin 密码</label>
-        <input id="password" type="password" name="password" autocomplete="current-password" required />
-      </div>
-      <button class="btn" type="submit">进入</button>
-    </form>
-    <p class="hint">对应 config 中 gateway.admin_password。调用 /v1 仍需 API Key。</p>
-  </section>
-  {% else %}
-
-  <section class="panel">
-    <h2>接入账号</h2>
-    <div class="tabs" role="tablist">
-      <button type="button" class="tab active" data-tab="pkce">PKCE 登录</button>
-      <button type="button" class="tab" data-tab="paste">粘贴 JWT</button>
-      <button type="button" class="tab" data-tab="script">浏览器脚本</button>
-      {% if prefer_cdp %}
-      <button type="button" class="tab" data-tab="cdp">CDP</button>
-      {% endif %}
-    </div>
-
-    <!-- PKCE -->
-    <div class="tab-panel active" id="panel-pkce">
-      <div class="split">
-        <div>
-          <div class="field">
-            <label for="pkce-label">备注</label>
-            <input id="pkce-label" placeholder="可选" />
-          </div>
-          <div class="row" style="margin-bottom:12px">
-            <button type="button" class="btn" id="btn-pkce-start">生成登录链接</button>
-            <a class="btn ghost" id="pkce-open" href="#" target="_blank" rel="noopener" style="display:none">打开登录页</a>
-          </div>
-          <div id="pkce-url-wrap" style="display:none">
-            <label>授权 URL</label>
-            <div class="codebox" id="pkce-url"></div>
-            <p class="hint">浏览器登录后，地址栏或 Network 中复制含 <span class="mono">oauth2/nativeclient?code=</span> 的完整 URL（落到 wrongplace 也没关系，抓带 code 的那次请求即可）。</p>
-          </div>
-          <form method="post" action="/ui/pkce/finish" id="pkce-finish-form" style="margin-top:14px;display:none">
-            <input type="hidden" name="account_key" id="pkce-key" />
-            <input type="hidden" name="label" id="pkce-label-hidden" />
-            <div class="field">
-              <label for="pkce-code">回调 URL 或 code</label>
-              <textarea id="pkce-code" name="code_or_url" required placeholder="粘贴 nativeclient?code=… 完整链接"></textarea>
-            </div>
-            <button class="btn" type="submit">完成交换</button>
-          </form>
-        </div>
-        <div>
-          <ol class="steps">
-            <li>生成链接并在浏览器登录 Microsoft 账号</li>
-            <li>复制带 <span class="mono">code=</span> 的回调地址</li>
-            <li>粘贴后点「完成交换」</li>
-            <li>之后由 MSAL silent 自动续期</li>
-          </ol>
-          <p class="hint">client · <span class="mono">{{ msal_client_id }}</span><br/>scope · Sydney M365Chat + readwrite</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Paste JWT -->
-    <div class="tab-panel" id="panel-paste">
-      <form method="post" action="/ui/import-token">
-        <div class="field">
-          <label>备注</label>
-          <input name="label" placeholder="可选" />
-        </div>
-        <div class="field">
-          <label>access_token（JWT）</label>
-          <textarea name="token" required placeholder="eyJ…"></textarea>
-        </div>
-        <div class="field">
-          <label>refresh_token（可选）</label>
-          <textarea name="refresh_token" placeholder="有则填，便于续期" style="min-height:64px"></textarea>
-        </div>
-        <button class="btn" type="submit">导入</button>
+    <nav class="nav">
+      {% if authed %}
+      <a href="/ui" class="on">控制台</a>
+      <a href="/ui/settings">设置</a>
+      <form method="post" action="/ui/logout" style="display:inline;margin:0">
+        <button class="btn ghost sm" type="submit">退出</button>
       </form>
-      <p class="hint">JWT 的 aud 须以 <span class="mono">https://substrate.office.com/</span> 开头。</p>
-    </div>
+      {% endif %}
+    </nav>
+  </header>
 
-    <!-- Browser script -->
-    <div class="tab-panel" id="panel-script">
-      <div class="split">
-        <div>
-          <p class="hint" style="margin-top:0">在已登录的 M365 Copilot 页注入捕获脚本，从 ChatHub WebSocket URL 取出 access_token。</p>
-          <div class="row" style="margin:12px 0">
-            <a class="btn" href="/static/capture.user.js" download="mcg-capture.user.js">下载 Userscript</a>
-            <button type="button" class="btn ghost" id="btn-copy-bm">复制书签脚本</button>
+  <main class="wrap">
+    {% if ok %}
+    <div class="flash ok">{{ ok_text or ('完成 · ' ~ ok) }}</div>
+    {% endif %}
+    {% if err %}
+    <div class="flash err">{{ err_text or ('失败 · ' ~ err) }}{% if msg %} — {{ msg }}{% endif %}</div>
+    {% endif %}
+
+    <section class="stats">
+      <div class="stat"><div class="k">账号</div><div class="v">{{ accounts|length }}</div></div>
+      <div class="stat"><div class="k">有效令牌</div><div class="v">{{ active }}</div></div>
+      <div class="stat"><div class="k">模型</div><div class="v">{{ models|length }}</div></div>
+      <div class="stat"><div class="k">OpenAI 兼容</div><div class="v small">/v1/chat/completions</div></div>
+    </section>
+
+    {% if authed and accounts|length == 0 %}
+    <section class="card">
+      <div class="hd"><h2>首次接入</h2><span class="meta">需要 M365 Copilot 企业账号</span></div>
+      <ol class="steps">
+        <li>用下方 PKCE 登录，或粘贴 substrate JWT</li>
+        <li>账号池状态变为有效</li>
+        <li>客户端 Base URL：<span class="mono">{{ base_url }}/v1</span>，Key 用 <span class="mono">gateway.api_keys</span></li>
+        <li>自检：<span class="mono">curl -s {{ base_url }}/health</span></li>
+      </ol>
+      <p class="hint">令牌只写本机 data/，不外传。</p>
+    </section>
+    {% endif %}
+
+    {% if authed %}
+    <section class="card">
+      <div class="hd"><h2>客户端接入</h2><span class="meta">Open WebUI / Cursor / Claude Code</span></div>
+      <div class="field">
+        <label>Base URL</label>
+        <div class="copyline">
+          <input id="base-url" class="mono" readonly value="{{ base_url }}/v1" />
+          <button type="button" class="btn sm" data-copy="#base-url">复制</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>示例</label>
+        <div class="code" id="curl-ex">curl {{ base_url }}/v1/models -H "Authorization: Bearer &lt;api_key&gt;"</div>
+      </div>
+      <p class="hint">模型填 <span class="mono">m365-copilot</span>，或 GET /v1/models 返回的 id。</p>
+    </section>
+    {% endif %}
+
+    {% if not authed %}
+    <section class="card login">
+      <div class="hd"><h2>管理登录</h2><span class="meta">admin</span></div>
+      <form method="post" action="/ui/login">
+        <div class="field">
+          <label for="password">密码</label>
+          <input id="password" type="password" name="password" autocomplete="current-password" required />
+        </div>
+        <div class="row">
+          <button class="btn primary" type="submit">进入</button>
+        </div>
+      </form>
+      <p class="hint">对应 config 的 gateway.admin_password。调 /v1 仍要 API Key。</p>
+    </section>
+    {% else %}
+
+    <section class="card">
+      <div class="hd"><h2>接入账号</h2><span class="meta">PKCE / JWT / 脚本</span></div>
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab on" data-tab="pkce">PKCE</button>
+        <button type="button" class="tab" data-tab="paste">粘贴 JWT</button>
+        <button type="button" class="tab" data-tab="script">浏览器脚本</button>
+        {% if prefer_cdp %}
+        <button type="button" class="tab" data-tab="cdp">CDP</button>
+        {% endif %}
+      </div>
+
+      <div class="pane on" id="panel-pkce">
+        <div class="cols">
+          <div>
+            <div class="field">
+              <label for="pkce-label">备注</label>
+              <input id="pkce-label" placeholder="可选" />
+            </div>
+            <div class="row" style="margin-bottom:12px">
+              <button type="button" class="btn primary" id="btn-pkce-start">生成登录链接</button>
+              <a class="btn" id="pkce-open" href="#" target="_blank" rel="noopener" style="display:none">打开登录页</a>
+            </div>
+            <div id="pkce-url-wrap" style="display:none">
+              <label>授权 URL</label>
+              <div class="code" id="pkce-url"></div>
+              <p class="hint">登录后复制含 <span class="mono">oauth2/nativeclient?code=</span> 的完整 URL。</p>
+            </div>
+            <form method="post" action="/ui/pkce/finish" id="pkce-finish-form" style="margin-top:14px;display:none">
+              <input type="hidden" name="account_key" id="pkce-key" />
+              <input type="hidden" name="label" id="pkce-label-hidden" />
+              <div class="field">
+                <label for="pkce-code">回调 URL 或 code</label>
+                <textarea id="pkce-code" name="code_or_url" required placeholder="粘贴 nativeclient?code=… 完整链接"></textarea>
+              </div>
+              <button class="btn primary" type="submit">完成交换</button>
+            </form>
+          </div>
+          <div>
+            <ol class="steps">
+              <li>生成链接并登录 Microsoft</li>
+              <li>复制带 <span class="mono">code=</span> 的回调地址</li>
+              <li>粘贴后点完成交换</li>
+              <li>之后 MSAL silent 续期</li>
+            </ol>
+            <p class="hint">client · <span class="mono">{{ msal_client_id }}</span><br/>scope · Sydney M365Chat + readwrite</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="pane" id="panel-paste">
+        <form method="post" action="/ui/import-token">
+          <div class="field">
+            <label>备注</label>
+            <input name="label" placeholder="可选" />
           </div>
           <div class="field">
-            <label>书签（拖到书签栏，或新建书签粘贴）</label>
-            <div class="codebox" id="bm-out">加载中…</div>
+            <label>access_token（JWT）</label>
+            <textarea name="token" required placeholder="eyJ…"></textarea>
           </div>
-          <ol class="steps">
-            <li>安装 Tampermonkey，导入 userscript；或使用书签</li>
-            <li>打开 <a href="https://m365.cloud.microsoft/chat" target="_blank" rel="noopener">m365.cloud.microsoft/chat</a></li>
-            <li>发一条消息触发 WS</li>
-            <li>点页面浮层「Copy JWT」，回到本页「粘贴 JWT」导入</li>
-          </ol>
-        </div>
-        <div>
-          <label>控制台备用</label>
-          <div class="codebox">MCG.copy()
+          <div class="field">
+            <label>refresh_token（可选）</label>
+            <textarea name="refresh_token" placeholder="有则填" style="min-height:64px"></textarea>
+          </div>
+          <button class="btn primary" type="submit">导入</button>
+        </form>
+        <p class="hint">JWT aud 须以 <span class="mono">https://substrate.office.com/</span> 开头。</p>
+      </div>
+
+      <div class="pane" id="panel-script">
+        <div class="cols">
+          <div>
+            <p class="hint" style="margin-top:0">在已登录的 M365 Copilot 页注入脚本，从 ChatHub WS URL 取 access_token。</p>
+            <div class="row" style="margin:12px 0">
+              <a class="btn primary" href="/static/capture.user.js" download="mcg-capture.user.js">下载 Userscript</a>
+              <button type="button" class="btn" id="btn-copy-bm">复制书签脚本</button>
+            </div>
+            <div class="field">
+              <label>书签脚本</label>
+              <div class="code" id="bm-out">加载中…</div>
+            </div>
+            <ol class="steps">
+              <li>Tampermonkey 导入 userscript，或用书签</li>
+              <li>打开 <a href="https://m365.cloud.microsoft/chat" target="_blank" rel="noopener">m365.cloud.microsoft/chat</a></li>
+              <li>发一条消息触发 WS</li>
+              <li>浮层 Copy JWT，再回本页粘贴导入</li>
+            </ol>
+          </div>
+          <div>
+            <label>控制台</label>
+            <div class="code">MCG.copy()
 MCG.last()
 MCG.list()</div>
-          <p class="hint">Userscript 安装后控制台可用上述对象。书签模式捕获后会尝试写入剪贴板。</p>
+            <p class="hint">Userscript 安装后可用。</p>
+          </div>
         </div>
       </div>
-    </div>
 
-    {% if prefer_cdp %}
-    <div class="tab-panel" id="panel-cdp">
-      <form method="post" action="/ui/browser-login">
-        <div class="field">
-          <label>备注</label>
-          <input name="label" placeholder="可选" />
-        </div>
-        <button class="btn" type="submit">启动 CDP 捕获</button>
-      </form>
-      <p class="hint">需要本机 Chrome/Edge。默认关闭 prefer_cdp。</p>
-    </div>
-    {% endif %}
-  </section>
-
-  <section class="panel">
-    <h2>账号池</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>账号</th>
-          <th>状态</th>
-          <th>TTL</th>
-          <th>MSAL</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for a in accounts %}
-        <tr>
-          <td>
-            <div>{{ a.label or "—" }}</div>
-            <div class="dim mono">{{ a.id[:16] }}{% if a.id|length > 16 %}…{% endif %}</div>
-          </td>
-          <td>
-            <span class="pill {% if a.token_valid %}ok{% else %}bad{% endif %}">{{ a.status }}</span>
-          </td>
-          <td class="mono">{{ a.token_ttl_sec }}s</td>
-          <td class="dim">
-            {% if a.detail and a.detail.msal_cache %}cache{% elif a.detail and a.detail.msal_sidecar_rt %}rt{% else %}—{% endif %}
-            {% if a.detail and a.detail.has_refresh_token %} · rt{% endif %}
-          </td>
-          <td>
-            <div class="row">
-              <form method="post" action="/ui/refresh-account">
-                <input type="hidden" name="account_id" value="{{ a.id }}" />
-                <button class="btn ghost sm" type="submit">刷新</button>
-              </form>
-              <form method="post" action="/ui/delete-account" onsubmit="return confirm('删除该账号？')">
-                <input type="hidden" name="account_id" value="{{ a.id }}" />
-                <button class="btn danger sm" type="submit">删除</button>
-              </form>
-            </div>
-          </td>
-        </tr>
-      {% else %}
-        <tr><td colspan="5" class="dim">暂无账号</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </section>
-
-  <div class="split">
-    <section class="panel">
-      <h2>模型</h2>
-      <table>
-        <thead><tr><th>ID</th><th>Tone</th><th>Label</th></tr></thead>
-        <tbody>
-        {% for m in models %}
-          <tr>
-            <td class="mono">{{ m.id }}</td>
-            <td class="dim">{{ m.tone }}</td>
-            <td>{{ m.label }}</td>
-          </tr>
-        {% endfor %}
-        </tbody>
-      </table>
+      {% if prefer_cdp %}
+      <div class="pane" id="panel-cdp">
+        <form method="post" action="/ui/browser-login">
+          <div class="field">
+            <label>备注</label>
+            <input name="label" placeholder="可选" />
+          </div>
+          <button class="btn primary" type="submit">启动 CDP 捕获</button>
+        </form>
+        <p class="hint">需要本机 Chrome/Edge。默认 prefer_cdp 关闭。</p>
+      </div>
+      {% endif %}
     </section>
-    <section class="panel">
-      <h2>最近请求</h2>
+
+    <section class="card">
+      <div class="hd"><h2>账号池</h2><span class="meta">{{ accounts|length }} 条</span></div>
       <table>
-        <thead><tr><th>时间</th><th>模型</th><th>账号</th></tr></thead>
-        <tbody>
-        {% for l in logs %}
+        <thead>
           <tr>
-            <td class="dim mono">{{ l.ts }}</td>
-            <td>{{ l.model }}</td>
-            <td class="dim mono">{{ l.account[:8] }}…</td>
+            <th>账号</th>
+            <th>状态</th>
+            <th>TTL</th>
+            <th>MSAL</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for a in accounts %}
+          <tr>
+            <td>
+              <div>{{ a.label or "—" }}</div>
+              <div class="muted mono">{{ a.id[:16] }}{% if a.id|length > 16 %}…{% endif %}</div>
+            </td>
+            <td>
+              <span class="dot {% if a.token_valid %}ok{% else %}bad{% endif %}"><i></i>{{ a.status }}</span>
+            </td>
+            <td class="mono">{{ a.token_ttl_sec }}s</td>
+            <td class="muted">
+              {% if a.detail and a.detail.msal_cache %}cache{% elif a.detail and a.detail.msal_sidecar_rt %}rt{% else %}—{% endif %}
+              {% if a.detail and a.detail.has_refresh_token %} · rt{% endif %}
+            </td>
+            <td>
+              <div class="row">
+                <form method="post" action="/ui/refresh-account">
+                  <input type="hidden" name="account_id" value="{{ a.id }}" />
+                  <button class="btn sm" type="submit">刷新</button>
+                </form>
+                <form method="post" action="/ui/delete-account" onsubmit="return confirm('删除该账号？')">
+                  <input type="hidden" name="account_id" value="{{ a.id }}" />
+                  <button class="btn danger sm" type="submit">删除</button>
+                </form>
+              </div>
+            </td>
           </tr>
         {% else %}
-          <tr><td colspan="3" class="dim">—</td></tr>
+          <tr><td colspan="5" class="muted">暂无账号</td></tr>
         {% endfor %}
         </tbody>
       </table>
     </section>
-  </div>
-  {% endif %}
-</main>
 
-<footer>MCG · Substrate gateway</footer>
+    <div class="cols">
+      <section class="card">
+        <div class="hd"><h2>模型</h2><span class="meta">advertise + catalog</span></div>
+        <table>
+          <thead><tr><th>ID</th><th>Tone</th><th>Label</th></tr></thead>
+          <tbody>
+          {% for m in models %}
+            <tr>
+              <td class="mono">{{ m.id }}</td>
+              <td class="muted">{{ m.tone }}</td>
+              <td>{{ m.label }}</td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </section>
+      <section class="card">
+        <div class="hd"><h2>最近请求</h2><span class="meta">最近 {{ logs|length }} 条</span></div>
+        <table>
+          <thead><tr><th>时间</th><th>模型</th><th>账号</th></tr></thead>
+          <tbody>
+          {% for l in logs %}
+            <tr>
+              <td class="muted mono">{{ l.ts }}</td>
+              <td>{{ l.model }}</td>
+              <td class="muted mono">{{ l.account[:8] }}…</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="3" class="muted">—</td></tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </div>
+    {% endif %}
+  </main>
 
-<script>
-(function () {
-  // tabs
-  document.querySelectorAll(".tab").forEach(function (tab) {
-    tab.addEventListener("click", function () {
-      var id = tab.getAttribute("data-tab");
-      document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("active"); });
-      document.querySelectorAll(".tab-panel").forEach(function (p) { p.classList.remove("active"); });
-      tab.classList.add("active");
-      var panel = document.getElementById("panel-" + id);
-      if (panel) panel.classList.add("active");
+  <footer class="foot">MCG · substrate reverse proxy</footer>
+
+  <script>
+  (function () {
+    document.querySelectorAll(".tab").forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        var id = tab.getAttribute("data-tab");
+        document.querySelectorAll(".tab").forEach(function (t) { t.classList.remove("on"); });
+        document.querySelectorAll(".pane").forEach(function (p) { p.classList.remove("on"); });
+        tab.classList.add("on");
+        var panel = document.getElementById("panel-" + id);
+        if (panel) panel.classList.add("on");
+      });
     });
-  });
 
-  // PKCE start
-  var btnStart = document.getElementById("btn-pkce-start");
-  if (btnStart) {
-    btnStart.addEventListener("click", async function () {
-      btnStart.disabled = true;
-      try {
-        var fd = new FormData();
-        fd.append("label", document.getElementById("pkce-label").value || "");
-        var res = await fetch("/ui/pkce/start", { method: "POST", body: fd, credentials: "same-origin" });
-        var data = await res.json();
-        if (!data.ok) throw new Error(data.error || "start failed");
-        document.getElementById("pkce-key").value = data.account_key;
-        document.getElementById("pkce-label-hidden").value = document.getElementById("pkce-label").value || "";
-        document.getElementById("pkce-url").textContent = data.auth_url;
-        document.getElementById("pkce-url-wrap").style.display = "block";
-        document.getElementById("pkce-finish-form").style.display = "block";
-        var open = document.getElementById("pkce-open");
-        open.href = data.auth_url;
-        open.style.display = "inline-flex";
-      } catch (e) {
-        alert(String(e.message || e));
-      } finally {
-        btnStart.disabled = false;
-      }
+    document.querySelectorAll("[data-copy]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var sel = btn.getAttribute("data-copy");
+        var el = document.querySelector(sel);
+        if (!el) return;
+        var text = el.value != null ? el.value : el.textContent;
+        navigator.clipboard.writeText(text).then(function () {
+          var old = btn.textContent;
+          btn.textContent = "已复制";
+          setTimeout(function () { btn.textContent = old; }, 1200);
+        });
+      });
     });
-  }
 
-  // bookmarklet
-  async function loadBookmarklet() {
-    var el = document.getElementById("bm-out");
-    if (!el) return;
-    try {
-      var src = await (await fetch("/static/capture.bookmarklet.js")).text();
-      // strip comments-ish and minify lightly
-      var body = src
-        .replace(/\/\*[\s\S]*?\*\//g, "")
-        .replace(/\/\/.*$/gm, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      // ensure IIFE
-      if (!body.startsWith("(")) body = "(" + body + ")";
-      var bm = "javascript:" + encodeURIComponent(body);
-      el.textContent = bm;
-      var copyBtn = document.getElementById("btn-copy-bm");
-      if (copyBtn) {
-        copyBtn.onclick = function () {
-          navigator.clipboard.writeText(bm).then(function () {
-            copyBtn.textContent = "已复制";
-            setTimeout(function () { copyBtn.textContent = "复制书签脚本"; }, 1500);
-          });
-        };
-      }
-    } catch (e) {
-      el.textContent = "无法加载书签脚本";
+    var btnStart = document.getElementById("btn-pkce-start");
+    if (btnStart) {
+      btnStart.addEventListener("click", async function () {
+        btnStart.disabled = true;
+        try {
+          var fd = new FormData();
+          fd.append("label", document.getElementById("pkce-label").value || "");
+          var res = await fetch("/ui/pkce/start", { method: "POST", body: fd, credentials: "same-origin" });
+          var data = await res.json();
+          if (!data.ok) throw new Error(data.error || "start failed");
+          document.getElementById("pkce-key").value = data.account_key;
+          document.getElementById("pkce-label-hidden").value = document.getElementById("pkce-label").value || "";
+          document.getElementById("pkce-url").textContent = data.auth_url;
+          document.getElementById("pkce-url-wrap").style.display = "block";
+          document.getElementById("pkce-finish-form").style.display = "block";
+          var open = document.getElementById("pkce-open");
+          open.href = data.auth_url;
+          open.style.display = "inline-flex";
+        } catch (e) {
+          alert(String(e.message || e));
+        } finally {
+          btnStart.disabled = false;
+        }
+      });
     }
-  }
-  loadBookmarklet();
-})();
-</script>
+
+    async function loadBookmarklet() {
+      var el = document.getElementById("bm-out");
+      if (!el) return;
+      try {
+        var src = await (await fetch("/static/capture.bookmarklet.js")).text();
+        var body = src
+          .replace(/\/\*[\s\S]*?\*\//g, "")
+          .replace(/\/\/.*$/gm, "")
+          .replace(/\s+/g, " ")
+          .trim();
+        if (!body.startsWith("(")) body = "(" + body + ")";
+        var bm = "javascript:" + encodeURIComponent(body);
+        el.textContent = bm;
+        var copyBtn = document.getElementById("btn-copy-bm");
+        if (copyBtn) {
+          copyBtn.onclick = function () {
+            navigator.clipboard.writeText(bm).then(function () {
+              copyBtn.textContent = "已复制";
+              setTimeout(function () { copyBtn.textContent = "复制书签脚本"; }, 1500);
+            });
+          };
+        }
+      } catch (e) {
+        el.textContent = "无法加载书签脚本";
+      }
+    }
+    loadBookmarklet();
+  })();
+  </script>
 </body>
 </html>
