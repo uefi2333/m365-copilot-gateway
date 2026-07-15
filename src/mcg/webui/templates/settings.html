@@ -12,7 +12,7 @@
       <div class="mark" aria-hidden="true"></div>
       <div>
         <a href="/ui"><strong>MCG</strong></a>
-        <span class="sub"> · settings</span>
+        <span class="sub"> · 设置</span>
       </div>
     </div>
     <nav class="nav">
@@ -23,112 +23,118 @@
 
   <main class="wrap" style="max-width:820px">
     {% if ok == "saved" %}
-      <div class="flash ok">设置已写入 config.yaml。部分项需重启生效。</div>
+      <div class="flash ok">设置已保存到 config.yaml。部分项需重启服务后生效。</div>
     {% elif err == "write" %}
-      <div class="flash err">写入失败: {{ msg }}</div>
+      <div class="flash err">写入失败：{{ msg }}</div>
     {% elif err == "auth" %}
-      <div class="flash err">请先登录</div>
+      <div class="flash err">请先登录管理后台</div>
     {% endif %}
 
     <form method="POST" action="/ui/settings/save">
       <section class="card">
-        <div class="hd"><h2>限流</h2><span class="meta">rate_limit</span></div>
+        <div class="hd"><h2>请求限流</h2><span class="meta">防止打爆号池</span></div>
         <div class="grid-2">
           <div class="field">
-            <label>enabled</label>
+            <label>是否启用</label>
             <select name="rate_limit.enabled">
               <option value="true" {% if config["rate_limit.enabled"] == True %}selected{% endif %}>开启</option>
               <option value="false" {% if config["rate_limit.enabled"] == False %}selected{% endif %}>关闭</option>
             </select>
           </div>
           <div class="field">
-            <label>requests_per_minute</label>
+            <label>每分钟请求数</label>
             <input name="rate_limit.requests_per_minute" value="{{ config.get('rate_limit.requests_per_minute', 60) }}" />
+            <p class="hint">单密钥滑动窗口上限</p>
           </div>
         </div>
         <div class="grid-2">
           <div class="field">
-            <label>burst</label>
+            <label>突发容量</label>
             <input name="rate_limit.burst" value="{{ config.get('rate_limit.burst', 10) }}" />
+            <p class="hint">短时允许超过均值的额外请求数</p>
           </div>
         </div>
       </section>
 
       <section class="card">
-        <div class="hd"><h2>号池</h2><span class="meta">pool</span></div>
+        <div class="hd"><h2>账号池策略</h2><span class="meta">多账号调度</span></div>
         <div class="grid-2">
           <div class="field">
-            <label>strategy</label>
+            <label>调度策略</label>
             <select name="pool.strategy">
-              <option value="round_robin" {% if config.get('pool.strategy') == 'round_robin' %}selected{% endif %}>round_robin</option>
-              <option value="sticky" {% if config.get('pool.strategy') == 'sticky' %}selected{% endif %}>sticky</option>
-              <option value="least_load" {% if config.get('pool.strategy') == 'least_load' %}selected{% endif %}>least_load</option>
+              <option value="round_robin" {% if config.get('pool.strategy') == 'round_robin' %}selected{% endif %}>轮询（round_robin）</option>
+              <option value="sticky" {% if config.get('pool.strategy') == 'sticky' %}selected{% endif %}>粘性（sticky，同用户跟号）</option>
+              <option value="least_load" {% if config.get('pool.strategy') == 'least_load' %}selected{% endif %}>最少负载（least_load）</option>
             </select>
           </div>
           <div class="field">
-            <label>cooldown_sec</label>
+            <label>冷却时间（秒）</label>
             <input name="pool.cooldown_sec" value="{{ config.get('pool.cooldown_sec', 60) }}" />
+            <p class="hint">账号出错后暂停接单的时长</p>
           </div>
         </div>
         <div class="field">
-          <label>max_consecutive_errors</label>
+          <label>连续错误上限</label>
           <input name="pool.max_consecutive_errors" value="{{ config.get('pool.max_consecutive_errors', 3) }}" />
-          <p class="hint">连续错误超过阈值后进入冷却。</p>
+          <p class="hint">达到后进入冷却，避免坏号拖垮整池</p>
         </div>
       </section>
 
       <section class="card">
-        <div class="hd"><h2>工具</h2><span class="meta">tools</span></div>
+        <div class="hd"><h2>工具调用</h2><span class="meta">function calling</span></div>
         <div class="grid-2">
           <div class="field">
-            <label>execution</label>
+            <label>执行方式</label>
             <select name="tools.execution">
-              <option value="client" {% if config.get('tools.execution') == 'client' %}selected{% endif %}>client</option>
-              <option value="local" {% if config.get('tools.execution') == 'local' %}selected{% endif %}>local</option>
+              <option value="client" {% if config.get('tools.execution') == 'client' %}selected{% endif %}>客户端执行（推荐）</option>
+              <option value="local" {% if config.get('tools.execution') == 'local' %}selected{% endif %}>网关本地执行</option>
             </select>
+            <p class="hint">客户端执行：返回 tool_calls 给 Cursor / Claude Code 等</p>
           </div>
           <div class="field">
-            <label>max_rounds</label>
+            <label>最大工具轮次</label>
             <input name="tools.max_rounds" value="{{ config.get('tools.max_rounds', 8) }}" />
+            <p class="hint">单次请求内模型↔工具往返上限</p>
           </div>
         </div>
         <div class="grid-2">
           <div class="field">
-            <label>repair_rounds</label>
+            <label>修复轮次</label>
             <input name="tools.repair_rounds" value="{{ config.get('tools.repair_rounds', 1) }}" />
+            <p class="hint">工具格式错误时自动纠错重试次数</p>
           </div>
         </div>
       </section>
 
       <section class="card">
-        <div class="hd"><h2>网关安全</h2><span class="meta">gateway</span></div>
+        <div class="hd"><h2>网关安全</h2><span class="meta">登录与鉴权</span></div>
         <div class="field">
-          <label>admin_password</label>
+          <label>管理密码</label>
           <input name="gateway.admin_password" type="password" value="{{ config.get('gateway.admin_password', '') }}" />
-          <p class="hint">WebUI 管理密码</p>
+          <p class="hint">Web 控制台登录密码</p>
         </div>
         <div class="field">
-          <label>api_keys</label>
+          <label>API 密钥</label>
           <input name="gateway.api_keys" value="{{ config.get('gateway.api_keys', '') }}" />
           <input type="hidden" name="gateway.api_keys_raw" value="" />
-          <p class="hint">多个 key 逗号分隔。改完客户端要同步更新。</p>
+          <p class="hint">多个密钥用英文逗号分隔。修改后客户端需同步更新</p>
         </div>
         <div class="field">
-          <label>cors_origins</label>
+          <label>跨域来源（CORS）</label>
           <input name="gateway.cors_origins" value="{{ config.get('gateway.cors_origins', '') }}" />
-          <p class="hint">如 http://localhost:3000</p>
+          <p class="hint">允许的前端来源，逗号分隔，例如 http://localhost:3000</p>
         </div>
       </section>
 
       <div class="actions">
         <a href="/ui" class="btn">取消</a>
-        <button type="submit" class="btn primary">保存</button>
+        <button type="submit" class="btn primary">保存设置</button>
       </div>
     </form>
 
-    <div class="pathline">{{ config_path }}</div>
+    <div class="pathline">配置文件：{{ config_path }}</div>
   </main>
 
-  <footer class="foot">MCG · substrate reverse proxy</footer>
+  <footer class="foot">MCG · Substrate 反代</footer>
 </body>
 </html>

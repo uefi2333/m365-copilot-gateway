@@ -12,7 +12,7 @@
       <div class="mark" aria-hidden="true"></div>
       <div>
         <strong>MCG</strong>
-        <span class="sub"> · gateway</span>
+        <span class="sub"> · 网关</span>
       </div>
     </div>
     <nav class="nav">
@@ -38,7 +38,7 @@
       <div class="stat"><div class="k">账号</div><div class="v">{{ accounts|length }}</div></div>
       <div class="stat"><div class="k">有效令牌</div><div class="v">{{ active }}</div></div>
       <div class="stat"><div class="k">模型</div><div class="v">{{ models|length }}</div></div>
-      <div class="stat"><div class="k">OpenAI 兼容</div><div class="v small">/v1/chat/completions</div></div>
+      <div class="stat"><div class="k">兼容端点</div><div class="v small">/v1/chat/completions</div></div>
     </section>
 
     {% if authed and accounts|length == 0 %}
@@ -248,9 +248,9 @@ MCG.list()</div>
 
     <div class="cols">
       <section class="card">
-        <div class="hd"><h2>模型</h2><span class="meta">advertise + catalog</span></div>
+        <div class="hd"><h2>模型</h2><span class="meta">公开列表</span></div>
         <table>
-          <thead><tr><th>ID</th><th>Tone</th><th>Label</th></tr></thead>
+          <thead><tr><th>ID</th><th>后端 tone</th><th>显示名</th></tr></thead>
           <tbody>
           {% for m in models %}
             <tr>
@@ -283,7 +283,7 @@ MCG.list()</div>
     {% endif %}
   </main>
 
-  <footer class="foot">MCG · substrate reverse proxy</footer>
+  <footer class="foot">MCG · Substrate 反代</footer>
 
   <script>
   (function () {

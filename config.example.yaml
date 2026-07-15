@@ -64,17 +64,23 @@ tools:
     - shell_route
 
 models:
-  # static seed; runtime may extend after live probe
+  # 公开模型列表（/v1/models 只暴露这里；不要塞一堆别名）
   advertise:
     - id: m365-copilot
       tone: Magic
-      label: "M365 Copilot (auto)"
-    - id: quick
-      tone: Gpt_Quick
-      label: "Quick"
-    - id: reasoning
-      tone: Gpt_Reasoning
-      label: "Think deeper"
+      label: "M365 Copilot（自动）"
+    - id: gpt-5.5-reasoning
+      tone: Gpt_5_5_Reasoning
+      label: "GPT-5.5 深度推理"
+    - id: gpt-5.5
+      tone: Gpt_5_5_Chat
+      label: "GPT-5.5 对话"
+    - id: gpt-5.4-reasoning
+      tone: Gpt_5_4_Reasoning
+      label: "GPT-5.4 深度推理"
+    - id: claude-sonnet-4.6
+      tone: Claude_Sonnet
+      label: "Claude Sonnet 4.6"
     - id: claude-sonnet
       tone: Claude_Sonnet
-      label: "Claude Sonnet tone"
+      label: "Claude Sonnet"

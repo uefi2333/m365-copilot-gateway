@@ -18,25 +18,14 @@ class ProbeEntry:
     latency_ms: int | None = None
 
 
-# Tones observed in community research / product UI — used as live catalog seed.
+# Probe seed — keep lean; public /v1/models uses config advertise.
 KNOWN_TONES: list[tuple[str, str, str, str]] = [
-    ("m365-copilot", "Magic", "M365 Copilot (auto)", "auto"),
-    ("auto", "Magic", "Auto / Magic", "auto"),
-    ("quick", "Gpt_Quick", "Quick", "gpt"),
-    ("reasoning", "Gpt_Reasoning", "Think deeper", "gpt"),
-    ("think-deeper", "Gpt_Reasoning", "Think deeper", "gpt"),
-    ("claude", "Claude_Sonnet", "Claude Sonnet tone", "claude"),
-    ("claude-sonnet", "Claude_Sonnet", "Claude Sonnet tone", "claude"),
-    ("claude-sonnet-think-deeper", "Claude_Sonnet_Reasoning", "Claude Sonnet reasoning", "claude"),
-    ("claude-opus", "Claude_Opus", "Claude Opus tone", "claude"),
-    ("gpt-5.5", "Gpt_5_5_Chat", "GPT-5.5 chat tone", "gpt"),
-    ("gpt-5.5-think-deeper", "Gpt_5_5_Reasoning", "GPT-5.5 reasoning tone", "gpt"),
-    ("gpt-5.4", "Gpt_5_4_Reasoning", "GPT-5.4", "gpt"),
-    ("gpt-5.4-quick", "Gpt_5_4_Quick", "GPT-5.4 quick", "gpt"),
-    ("gpt-5.3-quick", "Gpt_5_3_Quick", "GPT-5.3 quick", "gpt"),
-    ("gpt-5.3-think-deeper", "Gpt_5_3_Reasoning", "GPT-5.3 reasoning", "gpt"),
-    ("gpt-5.2-quick", "Gpt_5_2_Quick", "GPT-5.2 quick", "gpt"),
-    ("gpt-5.2-think-deeper", "Gpt_5_2_Reasoning", "GPT-5.2 reasoning", "gpt"),
+    ("m365-copilot", "Magic", "M365 Copilot（自动）", "auto"),
+    ("gpt-5.5-reasoning", "Gpt_5_5_Reasoning", "GPT-5.5 深度推理", "gpt"),
+    ("gpt-5.5", "Gpt_5_5_Chat", "GPT-5.5 对话", "gpt"),
+    ("gpt-5.4-reasoning", "Gpt_5_4_Reasoning", "GPT-5.4 深度推理", "gpt"),
+    ("claude-sonnet-4.6", "Claude_Sonnet", "Claude Sonnet 4.6", "claude"),
+    ("claude-sonnet", "Claude_Sonnet", "Claude Sonnet", "claude"),
 ]
 
 
