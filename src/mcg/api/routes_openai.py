@@ -366,9 +366,10 @@ async def chat_completions(
                 sess_sc = sessions.get_or_create(
                     sticky_sc, account_id=account.id, force_new=False
                 )
+                # hop2 chain disabled by default: no gateway-invented mkdir/Write.
+                # Client has its own shell/write tools and will follow skill text.
                 if _hop2_chain and has_file_tools and needs_tool_chain(canon):
                     calls = force_chain_tool_call(canon)
-                    # never re-call skill
                     calls = [
                         c for c in calls
                         if "skill" not in ((c.get("function") or {}).get("name") or "").lower()
@@ -400,9 +401,9 @@ async def chat_completions(
                                 conversation_id=sess_sc.conversation_id,
                             )
                         )
-                # No file tools (typical phone client: only use_skill + web + time).
-                # Pass skill markdown through as the answer — never "not a skill" prose.
-                if _hop2_pass and (not has_file_tools or not needs_tool_chain(canon)):
+                # After skill load: pass skill markdown through so the client
+                # (or next model turn) can follow real instructions — not a stub.
+                if _hop2_pass:
                     body_txt = (last_tool_content or "").strip()
                     if len(body_txt) > 12000:
                         body_txt = body_txt[:12000] + "\n\n…(skill truncated)"

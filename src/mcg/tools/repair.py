@@ -528,52 +528,10 @@ def force_chain_tool_call(canon: CanonicalRequest) -> list[dict[str, Any]]:
         for k in ("story-setup", "claude.md", ".claude/", "部署", "phase")
     )
 
-    if shell and skillish:
-        pick = shell
-        args = {
-            "command": (
-                "mkdir -p .claude/hooks .claude/rules .claude/agents && "
-                "touch .story-deployed && "
-                "printf '%s\\n' '# Project writing infra' > CLAUDE.md && "
-                "ls -la .claude .story-deployed CLAUDE.md 2>/dev/null || ls -la"
-            )
-        }
-    elif write:
-        pick = write
-        args = _guess_args(pick, user_text)
-        args = adapt_args_for_tool(pick, args)
-        path = str(args.get("path") or args.get("file_path") or "")
-        if (not path) or path.startswith("/hooks") or "Phase" in path or path.count("/") > 3 and "tmp" not in path:
-            # skill body often pollutes path extraction — use marker file
-            args["path"] = ".story-deployed"
-        content = args.get("content") or args.get("text")
-        if (not content) or len(str(content)) > 200 or "story-setup" in str(content) or "Phase" in str(content):
-            args["content"] = "deployed\n"
-            args.pop("text", None)
-    else:
-        scored = []
-        for t in candidates:
-            fam = family_of(t.name) or ""
-            score = {"write": 50, "shell": 45, "edit": 30, "read": 10}.get(fam, 0)
-            scored.append((score, t))
-        scored.sort(key=lambda x: -x[0])
-        if not scored or scored[0][0] <= 0:
-            # no deploy-capable tool — caller should passthrough skill text
-            return []
-        pick = scored[0][1]
-        args = _guess_args(pick, user_text)
-        args = adapt_args_for_tool(pick, args)
-
-    return [
-        {
-            "id": f"call_{uuid.uuid4().hex[:20]}",
-            "type": "function",
-            "function": {
-                "name": pick.name,
-                "arguments": json.dumps(args, ensure_ascii=False),
-            },
-        }
-    ]
+    # No hard-coded mkdir / .story-deployed scaffold.
+    # Client owns Write/Bash/skills; gateway must not invent deploy commands.
+    # Returning [] lets hop2 passthrough skill markdown or the model decide.
+    return []
 
 
 
