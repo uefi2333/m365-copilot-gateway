@@ -24,6 +24,45 @@ class SubstrateError(RuntimeError):
     pass
 
 
+def is_transient_substrate_error(exc: BaseException) -> bool:
+    """Upstream blips that deserve one retry, not an account cooldown."""
+    msg = str(exc).lower()
+    needles = (
+        "timed out",
+        "timeout",
+        "temporarily",
+        "connection closed",
+        "connection reset",
+        "broken pipe",
+        "server disconnected",
+        "try again",
+        "503",
+        "502",
+        "429",
+        "overloaded",
+        "going away",
+        "keepalive",
+        "network",
+        "eof",
+        "ssl",
+        "disengaged",
+        "throttl",
+        "rate limit",
+        "too many",
+        "unavailable",
+        "handshake",
+        "1006",
+        "1001",
+        "1011",
+    )
+    return any(n in msg for n in needles)
+
+
+def is_session_reset_error(exc: BaseException) -> bool:
+    msg = str(exc).lower()
+    return "disengaged" in msg or "conversation" in msg and "not found" in msg
+
+
 def fold_stream_text(answer: str, next_text: str) -> tuple[str, str | None]:
     """Merge delta/snapshot text without duplicating prefixes.
 

@@ -83,7 +83,163 @@ async def anthropic_messages(
                     canon.extra["multimodal_parts"] = bundle_parts
                     break
 
+    # Fingerprint (Claude Code almost always hits this path)
+    try:
+        from mcg.tools.agents import detect_agent, rewrite_tool_call_ids
+        _prof = detect_agent(
+            tools=canon.tools,
+            headers={k: v for k, v in request.headers.items()},
+            user_agent=request.headers.get("user-agent"),
+            path=str(request.url.path),
+            model=canon.model,
+        )
+        canon.extra["agent_id"] = _prof.id
+        canon.extra["agent_label"] = _prof.label
+        print(f"[mcg.agent] id={_prof.id} wire=anthropic", flush=True)
+    except Exception as _exc:  # noqa: BLE001
+        print(f"[mcg.agent] detect failed: {_exc}", flush=True)
+        _prof = None
+
     tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
+
+    # Slash / skill short-circuit (same policy as OpenAI path)
+    from mcg.tools.platform_adapt import should_short_circuit
+    from mcg.tools.repair import force_tool_call
+
+    last_user = ""
+    last_user_idx = -1
+    for i in range(len(canon.messages) - 1, -1, -1):
+        m = canon.messages[i]
+        if m.role == "user" and m.content:
+            last_user = m.content
+            last_user_idx = i
+            break
+    answered = any(
+        m.role in ("assistant", "tool")
+        for m in canon.messages[last_user_idx + 1 :]
+    ) if last_user_idx >= 0 else False
+    if canon.tools and last_user and not answered:
+        sc = should_short_circuit(canon.tools, last_user)
+        if sc is None and last_user.strip().startswith("/"):
+            forced = force_tool_call(canon.tools, user_text=last_user)
+            sc = forced[0] if forced else None
+        if sc is not None:
+            calls = sc if isinstance(sc, list) else [sc]
+            try:
+                from mcg.tools.agents import rewrite_tool_call_ids, PROFILES
+                aid = (canon.extra or {}).get("agent_id")
+                pr = PROFILES.get(aid) if aid else None
+                if pr:
+                    calls = rewrite_tool_call_ids(calls, pr) or calls
+            except Exception:
+                pass
+            sticky_sc = _sticky_key(body, account.id)
+            sess_sc = sessions.get_or_create(
+                sticky_sc, account_id=account.id, force_new=False
+            )
+            print(
+                f"[mcg.tools] ANTHROPIC SHORT-CIRCUIT → "
+                f"{[c.get('function', {}).get('name') for c in calls]}",
+                flush=True,
+            )
+            if body.stream:
+                frames = anthropic_sse_events(
+                    model=canon.model,
+                    text="",
+                    tool_calls=calls,
+                    conversation_id=sess_sc.conversation_id,
+                )
+                async def _sc():
+                    for fr in frames:
+                        yield fr
+                return StreamingResponse(_sc(), media_type="text/event-stream")
+            return JSONResponse(
+                final_anthropic_response(
+                    model=canon.model,
+                    content="",
+                    tool_calls=calls,
+                    conversation_id=sess_sc.conversation_id,
+                )
+            )
+
+    # Hop2 skill passthrough / chain (shared policy)
+    if canon.tools and answered:
+        from mcg.tools.inject import request_has_tool_results
+        from mcg.tools.platform_adapt import family_of
+        from mcg.tools.repair import needs_tool_chain, force_chain_tool_call
+        if request_has_tool_results(canon):
+            last_tool_content = ""
+            last_call_name = ""
+            for m in reversed(canon.messages):
+                if m.role == "tool" and m.content and not last_tool_content:
+                    last_tool_content = m.content
+                if m.role == "assistant" and m.tool_calls and not last_call_name:
+                    for tc in m.tool_calls:
+                        fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                        last_call_name = fn.get("name") or ""
+            skill_result = "skill" in (last_call_name or "").lower() or any(
+                k in (last_tool_content or "").lower()
+                for k in ("story-setup", "skill.md", "执行铁律", ".story-deployed", "phase 1")
+            )
+            has_file = any(family_of(t.name) in ("write", "shell", "edit") for t in canon.tools)
+            if skill_result:
+                sticky_sc = _sticky_key(body, account.id)
+                sess_sc = sessions.get_or_create(
+                    sticky_sc, account_id=account.id, force_new=False
+                )
+                if has_file and needs_tool_chain(canon):
+                    calls = [
+                        c for c in force_chain_tool_call(canon)
+                        if "skill" not in ((c.get("function") or {}).get("name") or "").lower()
+                    ]
+                    if calls:
+                        try:
+                            from mcg.tools.agents import rewrite_tool_call_ids, PROFILES
+                            aid = (canon.extra or {}).get("agent_id")
+                            pr = PROFILES.get(aid) if aid else None
+                            if pr:
+                                calls = rewrite_tool_call_ids(calls, pr) or calls
+                        except Exception:
+                            pass
+                        print(f"[mcg.tools] ANTHROPIC HOP2 CHAIN → {[c.get('function',{}).get('name') for c in calls]}", flush=True)
+                        if body.stream:
+                            frames = anthropic_sse_events(
+                                model=canon.model, text="", tool_calls=calls,
+                                conversation_id=sess_sc.conversation_id,
+                            )
+                            async def _h2():
+                                for fr in frames:
+                                    yield fr
+                            return StreamingResponse(_h2(), media_type="text/event-stream")
+                        return JSONResponse(
+                            final_anthropic_response(
+                                model=canon.model, content="", tool_calls=calls,
+                                conversation_id=sess_sc.conversation_id,
+                            )
+                        )
+                elif not has_file:
+                    body_txt = (last_tool_content or "").strip()[:12000]
+                    content = (
+                        "已加载技能正文（当前 Anthropic 客户端工具集无 Write/Bash）。\n\n---\n\n"
+                        + body_txt
+                    )
+                    print("[mcg.tools] ANTHROPIC HOP2 PASSTHROUGH", flush=True)
+                    if body.stream:
+                        frames = anthropic_sse_events(
+                            model=canon.model, text=content, tool_calls=None,
+                            conversation_id=sess_sc.conversation_id,
+                        )
+                        async def _pt():
+                            for fr in frames:
+                                yield fr
+                        return StreamingResponse(_pt(), media_type="text/event-stream")
+                    return JSONResponse(
+                        final_anthropic_response(
+                            model=canon.model, content=content, tool_calls=None,
+                            conversation_id=sess_sc.conversation_id,
+                        )
+                    )
+
     prompt = tool_loop.augment_prompt(canon)
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
@@ -181,8 +337,8 @@ async def anthropic_messages(
             )
         )
     except SubstrateError as exc:
-        pool.mark_error(account.id, cooldown=True)
+        pool.mark_soft_error(account.id)
         raise HTTPException(status_code=502, detail=f"substrate: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
-        pool.mark_error(account.id, cooldown=True)
+        pool.mark_soft_error(account.id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

@@ -8,6 +8,7 @@ from typing import Any
 
 from mcg.compat.canonical import CanonicalRequest, CanonicalTool
 from .inject import build_tool_preamble, request_has_tool_results
+from .platform_adapt import is_skill_router, adapt_args_for_tool
 
 FENCE_RE = re.compile(r"```([a-zA-Z0-9_\-\.]+)\s*\n(.*?)```", re.DOTALL)
 JSON_TOOL_RE = re.compile(r'\{\s*"tool_calls"\s*:\s*\[.*?\]\s*\}', re.DOTALL)
@@ -111,6 +112,10 @@ def parse_tool_calls_from_text(text: str, tools: list[CanonicalTool]) -> ParsedT
             continue
 
         arguments = _args_for_fence_body(tool_name, body)
+        # remap args to declared schema (Write path/content, use_skill name, …)
+        tool_obj = next((x for x in tools if x.name == tool_name), None)
+        if tool_obj and isinstance(arguments, dict):
+            arguments = adapt_args_for_tool(tool_obj, arguments)
         found.append(_make_call(tool_name, arguments))
         residual = residual.replace(m.group(0), "")
 
@@ -217,6 +222,7 @@ class ToolLoop:
             req.tools,
             self.strategies,
             has_tool_results=request_has_tool_results(req),
+            agent_id=(req.extra or {}).get("agent_id"),
         )
         if not preamble:
             return base

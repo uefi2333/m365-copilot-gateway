@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .canonical import CanonicalMessage, CanonicalRequest, CanonicalTool
+from mcg.tools.platform_adapt import normalize_tools
 
 
 class AnthropicMessagesRequest(BaseModel):
@@ -139,9 +140,21 @@ def to_canonical(req: AnthropicMessagesRequest) -> CanonicalRequest:
                 if block.get("type") == "tool_result":
                     c = block.get("content")
                     if isinstance(c, list):
-                        c = " ".join(
-                            str(x.get("text") if isinstance(x, dict) else x) for x in c
-                        )
+                        bits = []
+                        for x in c:
+                            if isinstance(x, dict):
+                                if x.get("type") == "text":
+                                    bits.append(str(x.get("text") or ""))
+                                elif "text" in x:
+                                    bits.append(str(x.get("text") or ""))
+                                else:
+                                    bits.append(str(x))
+                            else:
+                                bits.append(str(x))
+                        c = "\n".join(bits)
+                    # Claude Code sometimes sends is_error
+                    if block.get("is_error"):
+                        c = f"[tool_error]\n{c}"
                     messages.append(
                         CanonicalMessage(
                             role="tool",
@@ -163,18 +176,7 @@ def to_canonical(req: AnthropicMessagesRequest) -> CanonicalRequest:
             media_parts  # noqa: B018 — collected in extra
         messages.append(CanonicalMessage(role="user" if role == "user" else "assistant", content=text))
 
-    tools: list[CanonicalTool] = []
-    for t in req.tools or []:
-        name = t.get("name")
-        if not name:
-            continue
-        tools.append(
-            CanonicalTool(
-                name=name,
-                description=t.get("description") or "",
-                parameters=t.get("input_schema") or t.get("parameters") or {},
-            )
-        )
+    tools = normalize_tools(req.tools)
 
     user = req.user
     if not user and req.metadata:

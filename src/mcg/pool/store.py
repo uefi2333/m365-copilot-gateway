@@ -147,9 +147,16 @@ class AccountPool:
     def _eligible(self) -> list[Account]:
         now = time.time()
         out: list[Account] = []
+        dirty = False
         for acc in self.accounts.values():
             if acc.status == "disabled":
                 continue
+            # auto-exit cooldown when timer elapsed
+            if acc.status == "cooldown" and acc.cooldown_until <= now:
+                acc.status = "active"
+                acc.cooldown_until = 0.0
+                acc.errors = 0
+                dirty = True
             if acc.cooldown_until > now:
                 continue
             if not acc.token:
@@ -158,12 +165,19 @@ class AccountPool:
                 claims = decode_jwt_payload(acc.token)
                 if not is_substrate_token(claims) or seconds_remaining(claims) <= 0:
                     acc.status = "expired"
+                    dirty = True
                     continue
             except Exception:  # noqa: BLE001
                 continue
-            if acc.status == "expired":
+            if acc.status in ("expired", "cooldown"):
                 acc.status = "active"
+                dirty = True
             out.append(acc)
+        if dirty:
+            try:
+                self.save()
+            except Exception:  # noqa: BLE001
+                pass
         return out
 
     def acquire(self, sticky_key: str | None = None) -> Account:
@@ -193,9 +207,25 @@ class AccountPool:
         self.save()
 
     def mark_error(self, account_id: str, cooldown: bool = False) -> None:
+        """Count failure. Cooldown only after max_consecutive_errors.
+
+        `cooldown=True` is kept for call-site compatibility but no longer
+        forces an immediate single-error ban (kills single-account pools).
+        """
         acc = self.accounts[account_id]
         acc.errors += 1
-        if cooldown or acc.errors >= self.max_consecutive_errors:
+        if acc.errors >= self.max_consecutive_errors:
             acc.status = "cooldown"
-            acc.cooldown_until = time.time() + self.cooldown_sec
+            # shorter ban if caller marked soft-ish path via cooldown flag
+            sec = self.cooldown_sec if cooldown else self.cooldown_sec
+            acc.cooldown_until = time.time() + sec
+        else:
+            # stay active so the next request can retry
+            if acc.status == "cooldown" and acc.cooldown_until <= time.time():
+                acc.status = "active"
+                acc.cooldown_until = 0.0
         self.save()
+
+    def mark_soft_error(self, account_id: str) -> None:
+        """Alias: same policy as mark_error (no instant ban)."""
+        self.mark_error(account_id, cooldown=False)

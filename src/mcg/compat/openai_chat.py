@@ -11,13 +11,16 @@ from pydantic import BaseModel
 from mcg.multimodal.adapter import extract_from_content, render_multimodal_prompt
 
 from .canonical import CanonicalMessage, CanonicalRequest, CanonicalTool
+from mcg.tools.platform_adapt import normalize_tools
 
 
 class OpenAIChatRequest(BaseModel):
     model: str = "m365-copilot"
     messages: list[dict[str, Any]]
     tools: list[dict[str, Any]] | None = None
+    functions: list[dict[str, Any]] | None = None  # legacy OpenAI
     tool_choice: Any = None
+    function_call: Any = None  # legacy
     stream: bool = False
     user: str | None = None
     temperature: float | None = None
@@ -26,6 +29,19 @@ class OpenAIChatRequest(BaseModel):
     conversation_id: str | None = None
     # force new substrate conversation even if sticky key exists
     reset_conversation: bool = False
+
+    def model_post_init(self, __context: Any) -> None:
+        # Merge legacy functions → tools
+        if not self.tools and self.functions:
+            converted = []
+            for f in self.functions:
+                if not isinstance(f, dict):
+                    continue
+                if f.get("type") == "function" or "function" in f:
+                    converted.append(f)
+                else:
+                    converted.append({"type": "function", "function": f})
+            object.__setattr__(self, "tools", converted)
 
 
 def _extract_text(content: Any) -> str:
@@ -70,21 +86,7 @@ def to_canonical(req: OpenAIChatRequest) -> CanonicalRequest:
                 tool_calls=m.get("tool_calls"),
             )
         )
-    tools: list[CanonicalTool] = []
-    for t in req.tools or []:
-        fn = t.get("function") if t.get("type") == "function" else t
-        if not isinstance(fn, dict):
-            continue
-        name = fn.get("name")
-        if not name:
-            continue
-        tools.append(
-            CanonicalTool(
-                name=name,
-                description=fn.get("description") or "",
-                parameters=fn.get("parameters") or {},
-            )
-        )
+    tools = normalize_tools(req.tools)
     return CanonicalRequest(
         model=req.model,
         messages=messages,

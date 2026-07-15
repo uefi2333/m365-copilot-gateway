@@ -87,10 +87,14 @@ Tools are taken **only from the inbound request** — no server-side tool regist
 | Client | Wire | Status |
 |--------|------|--------|
 | OpenAI SDK / Open WebUI | Chat Completions + `tools` | P0 |
-| Cursor / Continue / Cline | OpenAI-compatible | P0 |
-| Claude Code | Anthropic Messages + tools | P1 |
-| OpenCode / Codex-style | OpenAI Responses | P1 |
-| Custom agents | Any of the above | map via compat layer |
+| Cursor / Continue / Cline | OpenAI-compatible + name aliases | P0 |
+| Claude Code | Anthropic Messages + skill short-circuit | P0 |
+| Codex CLI | OpenAI chat (`shell`/`apply_patch`) | P0 |
+| Phone / lite (skill+web only) | Hop2 skill passthrough | P0 |
+| OpenCode / Responses API | OpenAI Responses | P1 |
+| Custom agents | Fingerprint in `tools/agents.py` | map via compat layer |
+
+See [docs/AGENTS.md](docs/AGENTS.md) for pitfalls and hop policies.
 
 Tool execution: **client-executed by default** (gateway emits `tool_calls`; client runs tools and posts results). Optional local executors are off by default.
 

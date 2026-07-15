@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import time
 from pathlib import Path
 from typing import Any
@@ -18,9 +20,17 @@ from mcg.compat.openai_chat import (
 from mcg.models_catalog import resolve_tone, tone_for_tools
 from mcg.models_probe import catalog_snapshot, entries_to_openai, live_probe
 from mcg.multimodal.adapter import substrate_message_extras
-from mcg.substrate.client import SubstrateClient, SubstrateError
+from mcg.substrate.client import (
+    SubstrateClient,
+    SubstrateError,
+    is_transient_substrate_error,
+    is_session_reset_error,
+)
+
+log = logging.getLogger("mcg.openai")
 from mcg.tools.stream_filter import StreamToolAccumulator, iter_filtered_stream
-from mcg.tools.repair import maybe_repair_tool_call
+from mcg.tools.repair import maybe_repair_tool_call, force_tool_call
+from mcg.tools.platform_adapt import should_short_circuit
 from mcg.tools.sanitize import strip_reasoning_leak
 
 router = APIRouter()
@@ -38,7 +48,10 @@ def _sticky_key(body: OpenAIChatRequest, account_id: str) -> str:
         return f"c:{body.conversation_id}"
     if body.user:
         return f"u:{body.user}:{account_id}"
-    return f"a:{account_id}"
+    # No client sticky id → fresh conversation every request.
+    # Sharing a single account-wide session causes concurrent Disengaged storms.
+    import uuid as _uuid
+    return f"a:{account_id}:{_uuid.uuid4().hex[:12]}"
 
 
 @router.get("/v1/models")
@@ -206,8 +219,323 @@ async def chat_completions(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     canon = to_canonical(body)
+    # Fingerprint client (Cursor / CC / Codex / phone-lite / …)
+    try:
+        from mcg.tools.agents import detect_agent
+        _hdrs = {k: v for k, v in request.headers.items()}
+        _prof = detect_agent(
+            tools=canon.tools,
+            headers=_hdrs,
+            user_agent=request.headers.get("user-agent"),
+            path=str(request.url.path),
+            model=canon.model,
+        )
+        canon.extra["agent_id"] = _prof.id
+        canon.extra["agent_label"] = _prof.label
+        print(
+            f"[mcg.agent] id={_prof.id} tools={[t.name for t in canon.tools][:12]}",
+            flush=True,
+        )
+    except Exception as _exc:  # noqa: BLE001
+        print(f"[mcg.agent] detect failed: {_exc}", flush=True)
     tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
     prompt = tool_loop.augment_prompt(canon)
+
+    # Deterministic tool short-circuit for slash/skill intents on the *latest user turn*.
+    # Only short-circuit when nothing (assistant/tool) has answered that latest user msg yet.
+    # Prevents: (a) prose refusals on hop1, (b) infinite use_skill after tool results.
+    if True:  # always inspect; tools may be empty (log + legacy functions handled upstream)
+        last_user = ""
+        last_user_idx = -1
+        for i in range(len(canon.messages) - 1, -1, -1):
+            m = canon.messages[i]
+            if m.role == "user" and m.content:
+                last_user = m.content
+                last_user_idx = i
+                break
+        answered_after_user = any(
+            m.role in ("assistant", "tool")
+            for m in canon.messages[last_user_idx + 1 :]
+        ) if last_user_idx >= 0 else False
+        tool_names = [t.name for t in canon.tools]
+        # Always print so uvicorn captures even if logging level is WARNING
+        print(
+            f"[mcg.tools] n={len(canon.tools)} names={tool_names[:24]} "
+            f"last_user={last_user[:100]!r} answered={answered_after_user} "
+            f"model={canon.model} stream={body.stream}",
+            flush=True,
+        )
+        if canon.tools and last_user and not answered_after_user:
+            sc = should_short_circuit(canon.tools, last_user)
+            if sc is None and last_user.strip().startswith("/"):
+                forced = force_tool_call(canon.tools, user_text=last_user)
+                sc = forced[0] if forced else None
+            if sc is not None:
+                calls = sc if isinstance(sc, list) else [sc]
+                sticky_sc = _sticky_key(body, account.id)
+                sess_sc = sessions.get_or_create(
+                    sticky_sc, account_id=account.id, force_new=False
+                )
+                print(
+                    f"[mcg.tools] SHORT-CIRCUIT → "
+                    f"{[c.get('function', {}).get('name') for c in calls]}",
+                    flush=True,
+                )
+                if body.stream:
+                    async def _sc_gen():
+                        async def _empty():
+                            if False:
+                                yield ""
+                        async for sse in stream_openai_chunks(
+                            model=canon.model,
+                            text_iter=_empty(),
+                            tool_calls_holder=calls,
+                            conversation_id=sess_sc.conversation_id,
+                        ):
+                            yield sse
+                    return StreamingResponse(_sc_gen(), media_type="text/event-stream")
+                return JSONResponse(
+                    final_openai_response(
+                        model=canon.model,
+                        content=None,
+                        tool_calls=calls,
+                        conversation_id=sess_sc.conversation_id,
+                    )
+                )
+
+    # Hop-2: skill result already in messages. Never let model prose-refuse "not a skill".
+    # - If Write/Bash present → force deploy chain (no substrate).
+    # - Else → return skill body as assistant content (client has no file tools).
+    if canon.tools:
+        from mcg.tools.inject import request_has_tool_results
+        from mcg.tools.platform_adapt import family_of, is_skill_router
+        from mcg.tools.repair import needs_tool_chain, force_chain_tool_call
+
+        last_user = ""
+        last_user_idx = -1
+        for i in range(len(canon.messages) - 1, -1, -1):
+            m = canon.messages[i]
+            if m.role == "user" and m.content:
+                last_user = m.content
+                last_user_idx = i
+                break
+        answered_after_user = any(
+            m.role in ("assistant", "tool")
+            for m in canon.messages[last_user_idx + 1 :]
+        ) if last_user_idx >= 0 else False
+
+        if answered_after_user and request_has_tool_results(canon):
+            # last tool result content
+            last_tool_content = ""
+            last_tool_name = ""
+            for m in reversed(canon.messages):
+                if m.role == "tool" and m.content:
+                    last_tool_content = m.content
+                    last_tool_name = (m.name or "")
+                    break
+            # last assistant tool call name
+            last_call_name = ""
+            for m in reversed(canon.messages):
+                if m.role == "assistant" and m.tool_calls:
+                    for tc in m.tool_calls:
+                        fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                        last_call_name = (fn.get("name") or "")
+                    break
+            skill_result = (
+                "skill" in (last_call_name or "").lower()
+                or "skill" in (last_tool_name or "").lower()
+                or any(
+                    k in (last_tool_content or "").lower()
+                    for k in (
+                        "story-setup",
+                        "skill.md",
+                        "# story-setup",
+                        "执行铁律",
+                        "phase 1",
+                        "phase 2",
+                        ".story-deployed",
+                        "claude.md",
+                    )
+                )
+            )
+            # already finished deploy?
+            last_lower = (last_tool_content or "").lower()
+            deploy_done = (
+                any(k in last_lower for k in ("deployed", "部署完成", "已部署", "setup complete"))
+                and "skill" not in (last_call_name or "").lower()
+            )
+            has_file_tools = any(
+                family_of(t.name) in ("write", "shell", "edit") for t in canon.tools
+            )
+            # agent profile may disable chain (phone_lite) or force passthrough
+            _aid = (canon.extra or {}).get("agent_id") or "generic"
+            _hop2_chain = True
+            _hop2_pass = True
+            try:
+                from mcg.tools.agents import PROFILES
+                _pr = PROFILES.get(_aid)
+                if _pr:
+                    _hop2_chain = _pr.hop2_chain
+                    _hop2_pass = _pr.hop2_passthrough
+            except Exception:
+                pass
+            if skill_result and not deploy_done:
+                sticky_sc = _sticky_key(body, account.id)
+                sess_sc = sessions.get_or_create(
+                    sticky_sc, account_id=account.id, force_new=False
+                )
+                if _hop2_chain and has_file_tools and needs_tool_chain(canon):
+                    calls = force_chain_tool_call(canon)
+                    # never re-call skill
+                    calls = [
+                        c for c in calls
+                        if "skill" not in ((c.get("function") or {}).get("name") or "").lower()
+                    ]
+                    if calls:
+                        print(
+                            f"[mcg.tools] HOP2 CHAIN → "
+                            f"{[c.get('function',{}).get('name') for c in calls]}",
+                            flush=True,
+                        )
+                        if body.stream:
+                            async def _h2_gen():
+                                async def _empty():
+                                    if False:
+                                        yield ""
+                                async for sse in stream_openai_chunks(
+                                    model=canon.model,
+                                    text_iter=_empty(),
+                                    tool_calls_holder=calls,
+                                    conversation_id=sess_sc.conversation_id,
+                                ):
+                                    yield sse
+                            return StreamingResponse(_h2_gen(), media_type="text/event-stream")
+                        return JSONResponse(
+                            final_openai_response(
+                                model=canon.model,
+                                content=None,
+                                tool_calls=calls,
+                                conversation_id=sess_sc.conversation_id,
+                            )
+                        )
+                # No file tools (typical phone client: only use_skill + web + time).
+                # Pass skill markdown through as the answer — never "not a skill" prose.
+                if _hop2_pass and (not has_file_tools or not needs_tool_chain(canon)):
+                    body_txt = (last_tool_content or "").strip()
+                    if len(body_txt) > 12000:
+                        body_txt = body_txt[:12000] + "\n\n…(skill truncated)"
+                    skill_name = "skill"
+                    for m in reversed(canon.messages):
+                        if m.role == "assistant" and m.tool_calls:
+                            for tc in m.tool_calls:
+                                fn = (tc.get("function") or {}) if isinstance(tc, dict) else {}
+                                if "skill" in (fn.get("name") or "").lower():
+                                    try:
+                                        import json as _json
+                                        args = _json.loads(fn.get("arguments") or "{}")
+                                        skill_name = (
+                                            args.get("name")
+                                            or args.get("skill")
+                                            or skill_name
+                                        )
+                                    except Exception:
+                                        pass
+                            break
+                    header = (
+                        f"已加载技能 **{skill_name}**。\n"
+                        f"当前会话工具列表无 Write/Bash，网关无法代写文件；"
+                        f"技能正文如下，可按步骤在项目目录执行，"
+                        f"或给客户端挂上 Write/Bash 后再发一次 `/story-setup`。\n\n---\n\n"
+                    )
+                    print(
+                        f"[mcg.tools] HOP2 PASSTHROUGH skill={skill_name!r} "
+                        f"bytes={len(body_txt)} agent={_aid}",
+                        flush=True,
+                    )
+                    if body.stream:
+                        async def _pt_gen():
+                            async def _text():
+                                yield header + body_txt
+                            async for sse in stream_openai_chunks(
+                                model=canon.model,
+                                text_iter=_text(),
+                                tool_calls_holder=None,
+                                conversation_id=sess_sc.conversation_id,
+                            ):
+                                yield sse
+                        return StreamingResponse(
+                            _pt_gen(), media_type="text/event-stream"
+                        )
+                    return JSONResponse(
+                        final_openai_response(
+                            model=canon.model,
+                            content=header + body_txt,
+                            tool_calls=None,
+                            conversation_id=sess_sc.conversation_id,
+                        )
+                    )
+
+    # No tools registered but user typed /skill — still emit use_skill tool_call.
+    # Many skill-capable clients only inject tools for Claude; for OpenAI path they
+    # still execute tool_calls named use_skill / Skill. Without this, model prose-refuses.
+    if not canon.tools:
+        last_user = ""
+        last_user_idx = -1
+        for i in range(len(canon.messages) - 1, -1, -1):
+            m = canon.messages[i]
+            if m.role == "user" and m.content:
+                last_user = m.content
+                last_user_idx = i
+                break
+        answered = any(
+            m.role in ("assistant", "tool")
+            for m in canon.messages[last_user_idx + 1 :]
+        ) if last_user_idx >= 0 else False
+        slash = None
+        import re as _re
+        mslash = _re.search(r"(?m)^\s*/([A-Za-z0-9_\-\u4e00-\u9fff]+)", last_user or "")
+        if mslash and not answered:
+            slash = mslash.group(1)
+        if slash:
+            import uuid as _uuid, json as _json
+            call = {
+                "id": f"call_{_uuid.uuid4().hex[:20]}",
+                "type": "function",
+                "function": {
+                    "name": "use_skill",
+                    "arguments": _json.dumps({"name": slash}, ensure_ascii=False),
+                },
+            }
+            sticky_sc = _sticky_key(body, account.id)
+            sess_sc = sessions.get_or_create(
+                sticky_sc, account_id=account.id, force_new=False
+            )
+            print(
+                f"[mcg.tools] SYNTHETIC use_skill name={slash!r} (client sent 0 tools)",
+                flush=True,
+            )
+            if body.stream:
+                async def _syn_gen():
+                    async def _empty():
+                        if False:
+                            yield ""
+                    async for sse in stream_openai_chunks(
+                        model=canon.model,
+                        text_iter=_empty(),
+                        tool_calls_holder=[call],
+                        conversation_id=sess_sc.conversation_id,
+                    ):
+                        yield sse
+                return StreamingResponse(_syn_gen(), media_type="text/event-stream")
+            return JSONResponse(
+                final_openai_response(
+                    model=canon.model,
+                    content=None,
+                    tool_calls=[call],
+                    conversation_id=sess_sc.conversation_id,
+                )
+            )
+
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
 
@@ -314,24 +642,89 @@ async def chat_completions(
         if body.stream:
 
             async def gen():
+                # capture outer sess into a local that we can rebind safely
+                cur_sess = sess
                 try:
-                    raw_stream = client.chat_stream(prompt, **stream_kwargs)
+                    full_buf = ""
+                    last_err: Exception | None = None
+                    for attempt in range(3):
+                        try:
+                            raw_stream = client.chat_stream(prompt, **stream_kwargs)
+                            if canon.tools:
+                                acc = StreamToolAccumulator(t.name for t in canon.tools)
+                                async for piece in raw_stream:
+                                    acc.feed(piece)
+                                acc.flush()
+                                full_buf = acc.full
+                            else:
+                                parts: list[str] = []
+                                async for piece in raw_stream:
+                                    parts.append(piece)
+                                full_buf = "".join(parts)
+                            last_err = None
+                            break
+                        except Exception as exc:  # noqa: BLE001
+                            last_err = exc
+                            log.warning(
+                                "stream attempt=%s err=%s sticky=%s tools=%s",
+                                attempt,
+                                exc,
+                                sticky,
+                                len(canon.tools),
+                            )
+                            if attempt >= 2:
+                                break
+                            if is_session_reset_error(exc) or is_transient_substrate_error(exc):
+                                cur_sess = sessions.get_or_create(
+                                    sticky, account_id=account.id, force_new=True
+                                )
+                                stream_kwargs["conversation_id"] = cur_sess.conversation_id
+                                stream_kwargs["session_id"] = cur_sess.session_id
+                                stream_kwargs["is_start_of_session"] = True
+                                continue
+                            break
+
+                    if last_err is not None and not full_buf:
+                        # tools: degrade to synthetic tool_call instead of HTML 500
+                        if canon.tools:
+                            from mcg.tools.repair import force_tool_call
+
+                            user_text = "\n".join(
+                                m.content
+                                for m in canon.messages
+                                if m.role == "user" and m.content
+                            )
+                            tool_holder = force_tool_call(
+                                canon.tools, user_text=user_text
+                            )
+                            log.error(
+                                "stream disengage fallback tools err=%s", last_err
+                            )
+                            pool.mark_soft_error(account.id)
+
+                            async def _empty():
+                                if False:
+                                    yield ""
+
+                            async for sse in stream_openai_chunks(
+                                model=canon.model,
+                                text_iter=_empty(),
+                                tool_calls_holder=tool_holder,
+                                conversation_id=cur_sess.conversation_id,
+                            ):
+                                yield sse
+                            return
+                        pool.mark_soft_error(account.id)
+                        raise last_err
+
                     if canon.tools:
-                        # Buffer while tools are declared so we can:
-                        # 1) strip fences / run repair
-                        # 2) emit EITHER content OR tool_calls (not narrate then tools)
-                        acc = StreamToolAccumulator(t.name for t in canon.tools)
-                        async for piece in raw_stream:
-                            acc.feed(piece)  # accumulate; ignore safe content for now
-                        acc.flush()
                         parsed = await maybe_repair_tool_call(
                             client=client,
                             tool_loop=tool_loop,
                             canon=canon,
                             stream_kwargs=stream_kwargs,
-                            full_text=acc.full,
-                            # 0 soft-repair: hard refuse forces immediately
-                            repair_rounds=0 if canon.tools else cfg.tools.repair_rounds,
+                            full_text=full_buf,
+                            repair_rounds=0,
                         )
                         tool_holder: list = list(parsed.tool_calls)
 
@@ -339,7 +732,7 @@ async def chat_completions(
                             if tool_holder:
                                 return
                             text = strip_reasoning_leak(
-                                (parsed.text or acc.full or "").strip()
+                                (parsed.text or full_buf or "").strip()
                             )
                             if text:
                                 yield text
@@ -348,39 +741,87 @@ async def chat_completions(
                             model=canon.model,
                             text_iter=text_out(),
                             tool_calls_holder=tool_holder,
-                            conversation_id=sess.conversation_id,
+                            conversation_id=cur_sess.conversation_id,
                         ):
                             yield sse
                     else:
 
                         async def text_iter():
-                            async for piece in raw_stream:
-                                yield piece
+                            if full_buf:
+                                yield full_buf
 
                         async for sse in stream_openai_chunks(
                             model=canon.model,
                             text_iter=text_iter(),
                             tool_calls_holder=None,
-                            conversation_id=sess.conversation_id,
+                            conversation_id=cur_sess.conversation_id,
                         ):
                             yield sse
 
                     pool.mark_success(account.id)
                     sessions.touch(sticky, success=True)
-                except Exception:
-                    pool.mark_error(account.id, cooldown=True)
+                except Exception as exc:
+                    log.error("stream fail: %s", exc)
+                    pool.mark_soft_error(account.id)
                     raise
 
             return StreamingResponse(gen(), media_type="text/event-stream")
 
-        full = await client.chat(prompt, **stream_kwargs)
+        full = ""
+        last_err: Exception | None = None
+        for attempt in range(3):
+            try:
+                full = await client.chat(prompt, **stream_kwargs)
+                last_err = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_err = exc
+                log.warning(
+                    "chat attempt=%s err=%s sticky=%s tools=%s",
+                    attempt,
+                    exc,
+                    sticky,
+                    len(canon.tools),
+                )
+                if attempt >= 2:
+                    break
+                if is_session_reset_error(exc) or is_transient_substrate_error(exc):
+                    sess = sessions.get_or_create(
+                        sticky, account_id=account.id, force_new=True
+                    )
+                    stream_kwargs["conversation_id"] = sess.conversation_id
+                    stream_kwargs["session_id"] = sess.session_id
+                    stream_kwargs["is_start_of_session"] = True
+                    continue
+                break
+
+        if last_err is not None and not full:
+            # tool clients: never hard-fail with 502 if we can synthesize a call
+            if canon.tools:
+                from mcg.tools.repair import force_tool_call
+
+                user_text = "\n".join(
+                    m.content for m in canon.messages if m.role == "user" and m.content
+                )
+                log.error("chat disengage fallback tools err=%s", last_err)
+                pool.mark_soft_error(account.id)
+                return JSONResponse(
+                    final_openai_response(
+                        model=canon.model,
+                        content=None,
+                        tool_calls=force_tool_call(canon.tools, user_text=user_text),
+                        conversation_id=sess.conversation_id,
+                    )
+                )
+            pool.mark_soft_error(account.id)
+            raise last_err if isinstance(last_err, SubstrateError) else SubstrateError(str(last_err))
+
         parsed = await maybe_repair_tool_call(
             client=client,
             tool_loop=tool_loop,
             canon=canon,
             stream_kwargs=stream_kwargs,
             full_text=full,
-            # tools: force on refuse, no soft repair round (latency)
             repair_rounds=0 if canon.tools else 0,
         )
         pool.mark_success(account.id)
@@ -399,8 +840,10 @@ async def chat_completions(
             )
         )
     except SubstrateError as exc:
-        pool.mark_error(account.id, cooldown=True)
+        log.error("substrate 502: %s", exc)
+        pool.mark_soft_error(account.id)
         raise HTTPException(status_code=502, detail=f"substrate: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
-        pool.mark_error(account.id, cooldown=True)
+        log.exception("chat 500: %s", exc)
+        pool.mark_soft_error(account.id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
