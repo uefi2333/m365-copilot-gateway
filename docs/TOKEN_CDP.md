@@ -45,7 +45,7 @@ from DevTools Network or the brief address-bar flash.
 
 ### Device code
 
-Often rejected for this first-party client. Prefer `mcg login`.
+Often rejected for this first-party client. ChatHub-valid RT→AT is **NOT guaranteed**. Prefer `mcg login`.
 
 ### Live probes (2026-07-15)
 
