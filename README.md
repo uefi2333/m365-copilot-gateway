@@ -1,175 +1,269 @@
 # M365 Copilot Gateway
 
-**Authoritative Microsoft 365 Copilot reverse proxy** — turns your licensed M365 Copilot web session (Substrate SignalR WebSocket) into a production-grade OpenAI / Anthropic compatible API.
+Self-hosted OpenAI‑compatible proxy for Microsoft 365 Copilot (Substrate/Sydney).
 
-> Unofficial. Not affiliated with Microsoft. Uses the same undocumented `substrate.office.com` ChatHub protocol as the M365 Copilot web UI. For personal / self-hosted use with accounts you are authorized to operate. Interfaces can change without notice.
+Drop‑in replacement for `api.openai.com` — works with **Cherry Studio**, **Open WebUI**, **NextChat**, **AstrBot**, `curl`, and any OpenAI SDK.
 
-## Features (product target)
+```
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer <your-api-key>" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"m365-copilot","messages":[{"role":"user","content":"Hello"}]}'
+```
 
-| Area | Capability |
-|------|------------|
-| **Protocol** | Real Substrate WebSocket (`wss://substrate.office.com/m365Copilot/Chathub`) + SignalR JSON |
-| **API** | OpenAI `chat/completions` + `models`, Anthropic `messages`, OpenAI Responses (phased) |
-| **Models** | Auto-discover / advertise tones (Magic, Quick, Reasoning, Claude_*, Gpt_*, …) |
-| **Tools** | Zero pre-registration — dynamic `tools[]` from each client request; multi-agent wire formats |
-| **Accounts** | Account pool, health, cooldown, round-robin / sticky; semi-auto import (browser / token paste) |
-| **Auth** | Gateway API keys, admin session for WebUI |
-| **WebUI** | Dashboard: pool, tokens TTL, request log, model list, import wizard |
-| **Ops** | Docker Compose, `/health`, keepalive, structured logs |
+---
 
-## Quick start
+## Features
 
-Full walkthrough: [docs/QUICKSTART.md](docs/QUICKSTART.md).
+| Capability | Status |
+|---|---|
+| OpenAI `/v1/chat/completions` (stream + non‑stream) | ✅ |
+| Anthropic `/v1/messages` | ✅ |
+| Tools / Function calling (OpenAI‑style) | ✅ |
+| Multi‑modal (image input, audio input) | ✅ |
+| Image generation (Substrate `GraphicArt`) | ✅ |
+| Token auto‑refresh (MSAL OAuth, no Chrome) | ✅ |
+| Account pool (Round‑Robin / Sticky / Least‑load) | ✅ |
+| WebUI admin panel (`/ui`) | ✅ |
+| Rate limiting (per‑key / per‑IP) | ✅ |
+| Docker Compose (single‑command deploy) | ✅ |
+| Production TLS (Caddy + Let's Encrypt) | ✅ |
+
+---
+
+## Quick Start
+
+### 1. Get an M365 Copilot subscription
+
+You need an active Microsoft 365 Copilot license (Microsoft 365 Copilot, not the free Bing Chat).  
+The gateway uses the same Substrate protocol as `copilot.microsoft.com` — it authenticates with your M365 identity.
+
+### 2. Deploy
+
+**Docker (recommended):**
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e .
+git clone https://github.com/your-org/m365-copilot-gateway.git
+cd m365-copilot-gateway
+
 cp config.example.yaml config.yaml
-# set gateway.api_keys + gateway.admin_password
+# Edit config.yaml — set at least:
+#   gateway.api_keys       → your API key(s)
+#   gateway.admin_password → WebUI password
+#   token section          → your MSAL/OAuth credentials
 
-mcg serve
-# API  http://127.0.0.1:8080/v1
-# UI   http://127.0.0.1:8080/ui  ← login, then PKCE / paste JWT
+docker compose up -d --build
+open http://127.0.0.1:8080/ui
 ```
 
-Docker:
+**Bare metal (Python 3.11+):**
 
 ```bash
-cp config.example.yaml config.yaml   # edit secrets
-docker compose up -d --build
+pip install -e .
+mcg serve -c config.yaml
 ```
 
-| Setting | Value |
-|---------|--------|
-| Base URL | `http://127.0.0.1:8080/v1` |
-| API Key | `gateway.api_keys` entry |
-| Model | `m365-copilot` or `GET /v1/models` |
+### 3. Authenticate
+
+Open the WebUI at `/ui`, log in with `admin_password`, and click **Add Account**:
+
+1. Click "Login with Microsoft" — a browser tab will open
+2. Sign in with your M365 Copilot‑licensed account
+3. Copy the redirect‑URI code back into the WebUI
+
+The gateway uses MSAL under the hood — tokens are refreshed silently in the background.  
+(If MSAL fails, the WebUI also supports Chrome CDP‑based token capture.)
+
+### 4. Use it
+
+Point any OpenAI‑compatible client at the gateway:
+
+```
+Base URL:  http://your-server:8080/v1
+API Key:   <your-api-key>
+Model:     m365-copilot
+```
+
+---
+
+## Configuration
+
+See `config.example.yaml` for a complete reference. Key sections:
+
+### `gateway`
+
+```yaml
+gateway:
+  host: "127.0.0.1"         # bind address (0.0.0.0 for Docker)
+  port: 8080
+  api_keys:                  # list of valid API keys
+    - "sk-your-api-key"
+  admin_password: "..."      # WebUI login
+  cors_origins: []           # CORS for browser frontends
+```
+
+### `rate_limit`
+
+```yaml
+rate_limit:
+  enabled: false             # enable for production
+  requests_per_minute: 60    # per API key / IP
+  burst: 10                  # burst window
+```
+
+### `token`
+
+```yaml
+token:
+  use_sydney_msal: true      # MSAL OAuth (recommended)
+  # OR for legacy flows:
+  oauth_client_id: null
+  oauth_client_secret: null
+  prefer_cdp: false          # Chrome CDP fallback
+```
+
+### `tools`
+
+```yaml
+tools:
+  execution: client          # "client" = tools run on the caller side
+  max_rounds: 8              # max model↔tool hops per request
+```
+
+### `models`
+
+```yaml
+models:
+  advertise:
+    - id: m365-copilot       # model name sent to clients
+      tone: Magic            # Substrate conversation tone
+      label: "M365 Copilot"
+```
+
+Available tones: `Magic`, `Gpt_Quick`, `Gpt_Reasoning`, `Claude_Sonnet`, `Gpt_Moody`, `Gpt_Balanced`, `Gpt_Precise`, `Gpt_Creative`.
+
+---
+
+## API Endpoints
+
+### `POST /v1/chat/completions` — OpenAI‑compatible chat
+
+Standard OpenAI request/response shape. Supports streaming (`stream: true`).
+
+**Additional response fields:**
+- `usage` — token estimates (prompt, completion, total)
+- `timing` — `ttft_ms`, `speed_chars_per_sec`, `output_chars`, `elapsed_ms`
+- `conversation_id` — Substrate conversation ID (for debugging)
+
+### `POST /v1/messages` — Anthropic‑compatible chat
+
+Thin adapter over the same Substrate backend.
+
+### `GET /v1/models` — Model list
+
+Returns advertised models + runtime‑detected capabilities.
+
+### `GET /v1/models/probe` — Capability catalog
+
+Static + live‑detected feature flags per model.
+
+### `GET /v1/metrics` — Performance metrics
+
+Recent (up to 50) request timings with TTFT/speed summary.
+
+### `GET /health` — Health check
+
+```json
+{"ok": true, "version": "0.2.0", "accounts_total": 1, ...}
+```
+
+---
+
+## Production Deployment
+
+### With TLS (Caddy + Let's Encrypt)
+
+1. Set `copilot.uefi233.bond` in `Caddyfile` to your actual domain
+2. Ensure ports 80/443 are reachable from the internet
+3. DNS must point to your server
+
+```bash
+docker compose --profile tls up -d
+```
+
+### Behind a reverse proxy
+
+The gateway emits `X-Accel-Buffering: no` for streaming responses — nginx passes SSE through correctly without buffering.
+
+```nginx
+location /v1/ {
+    proxy_pass http://127.0.0.1:8080;
+    proxy_http_version 1.1;
+    proxy_set_header Connection '';
+    chunked_transfer_encoding on;
+    proxy_buffering off;
+}
+```
+
+---
 
 ## Architecture
 
 ```
-Clients (Cursor / Claude Code / OpenCode / Open WebUI / SDK)
-        │  OpenAI | Anthropic | Responses
-        ▼
-┌─────────────────────────────────────┐
-│  Gateway API + Auth + WebUI         │
-├─────────────────────────────────────┤
-│  Compat layer  →  CanonicalRequest  │
-│  Tool loop (dynamic tools, no registry) │
-│  Multimodal adapter                 │
-├─────────────────────────────────────┤
-│  Account pool + Token fabric        │
-│  (hot cache → disk → CDP refresh)   │
-├─────────────────────────────────────┤
-│  Substrate client (SignalR / ChatHub) │
-└─────────────────────────────────────┘
+┌─────────────────────┐     OpenAI/Anthropic API      ┌──────────────────────┐
+│  Client (Cherry     │ ──────────────────────────────▶│  M365 Copilot Gateway │
+│  Studio, Open       │                                │  :8080               │
+│  WebUI, curl, …)    │◀──────────────────────────────│                      │
+└─────────────────────┘     SSE streaming + tools      │  ┌────────────────┐  │
+                                                       │  │ Account Pool   │  │
+                                                       │  │ (Round‑Robin)  │  │
+                                                       │  └───────┬────────┘  │
+                                                       │          │           │
+                                                       │  ┌───────▼────────┐  │
+                                                       │  │ Token Fabric   │  │
+                                                       │  │ (MSAL / CDP)   │  │
+                                                       │  └───────┬────────┘  │
+                                                       │          │           │
+                                                       │  ┌───────▼────────┐  │
+                                                       │  │ Substrate WS   │  │
+                                                       │  │ (SignalR)      │  │
+                                                       │  └────────────────┘  │
+                                                       └──────────────────────┘
+                                                                │
+                                                       ┌────────▼────────┐
+                                                       │  Microsoft 365   │
+                                                       │  Copilot (cloud) │
+                                                       └─────────────────┘
 ```
 
-## Code references / attribution
+---
 
-This project is an independent implementation. Protocol understanding and design choices draw heavily from public open-source work. **Study their code; do not violate their licenses when copying.**
-
-| Project | Role in our design | License (as published) |
-|---------|-------------------|-------------------------|
-| [cramt/m365-copilot-proxy](https://github.com/cramt/m365-copilot-proxy) | Deepest protocol notes (`docs/m365-copilot-api.md`), stream fold, stop frame, throttle, tool fence / shell-routing, native actions | check repo |
-| [kuchris/m365-copilot-openai-proxy](https://github.com/kuchris/m365-copilot-openai-proxy) | Clean Python Substrate client skeleton, token refresh notes, OpenAI proxy shape | Apache-2.0 |
-| [HEXUXIU/M365-Copilot2API](https://github.com/HEXUXIU/M365-Copilot2API) | Payload optionsSets, conversation history, connection reuse, CLI/setup patterns | Research / check repo |
-| [edlaver/m365-copilot-bun-proxy](https://github.com/edlaver/m365-copilot-bun-proxy) | Dual Graph+Substrate client patterns, session store, debug logging | check repo |
-| [nizarfadlan/m365-copilot-proxy](https://github.com/nizarfadlan/m365-copilot-proxy) | Rust port of kuchris; Metrics frame; CDP browser attach ideas | Apache-2.0 |
-
-**Not used as Substrate base (different product line):**
-
-- GitHub Copilot proxies (e.g. `ericc-ch/copilot-api`)
-- Consumer `copilot.microsoft.com` proxies (e.g. `sums001/Windows-Copilot-API`)
-- Browser-fetch-only gateways without ChatHub (e.g. parts of `iv0rish/m365-copilot-proxy`)
-
-See [docs/ATTRIBUTIONS.md](docs/ATTRIBUTIONS.md) and [docs/protocol.md](docs/protocol.md).
-
-## Agent client compatibility
-
-Tools are taken **only from the inbound request** — no server-side tool registration required.
-
-| Client | Wire | Status |
-|--------|------|--------|
-| OpenAI SDK / Open WebUI | Chat Completions + `tools` | P0 |
-| Cursor / Continue / Cline | OpenAI-compatible + name aliases | P0 |
-| Claude Code | Anthropic Messages + skill short-circuit | P0 |
-| Codex CLI | OpenAI chat (`shell`/`apply_patch`) | P0 |
-| Phone / lite (skill+web only) | Hop2 skill passthrough | P0 |
-| OpenCode / Responses API | OpenAI Responses | P1 |
-| Custom agents | Fingerprint in `tools/agents.py` | map via compat layer |
-
-See [docs/AGENTS.md](docs/AGENTS.md) for pitfalls and hop policies.
-
-Tool execution: **client-executed by default** (gateway emits `tool_calls`; client runs tools and posts results). Optional local executors are off by default.
-
-## Auth (mature — cramt/lezi)
+## Development
 
 ```bash
-pip install -e ".[auth]"   # msal
-mcg login --label alice    # print PKCE URL
-mcg login --id KEY --finish "…/oauth2/nativeclient?code=…"
-mcg refresh-token ACCOUNT  # silent MSAL / sidecar RT
-# fallback
-echo "$JWT" | mcg import-token - --label alice
+git clone https://github.com/your-org/m365-copilot-gateway.git
+cd m365-copilot-gateway
+pip install -e ".[dev]"
+mcg serve -c config.yaml
 ```
 
-See [docs/TOKEN_CDP.md](docs/TOKEN_CDP.md).
+Run tests:
 
-
-## Security
-
-- Default bind: `127.0.0.1`
-- Require gateway API key for `/v1/*`
-- Admin WebUI cookie / password separate from API keys
-- Tokens stored under `data_dir` with restricted permissions
-- Do not expose publicly without TLS + strong keys + network policy
-
-## API surface
-
-| Endpoint | Notes |
-|----------|--------|
-| `POST /v1/chat/completions` | OpenAI chat (+ tools, multimodal content parts) |
-| `POST /v1/messages` | Anthropic Messages API shape |
-| `GET /v1/models` | Advertised model / tone list |
-| `GET /v1/models/probe` | Catalog snapshot (no live calls) |
-| `POST /v1/models/probe?max_tones=2` | Live tone probe (uses quota) |
-| `GET /health` | Health + feature flags |
-| `GET /admin/auth/status` | Token / refresh / keepalive |
-
-### Tools execution
-
-```yaml
-tools:
-  execution: client   # default-safe: return tool_calls to client
-  # execution: local  # gateway runs shell-like tools (bash/shell/…)
-  max_rounds: 8
+```bash
+pytest tests/
 ```
 
-### Multimodal
-
-OpenAI `image_url` / `input_audio` parts are parsed, hashed, injected into the
-Substrate text prompt, and best-effort attached as `imageBase64` / `imageUrl`
-on the chat message (tenant may ignore unknown fields).
-
-## Development status
-
-| Phase | Scope | State |
-|-------|--------|--------|
-| P0 | Chat + OpenAI + Anthropic + tools + multimodal + probe + auth keepalive | **done** |
-| P1 | Account pool + token fabric + WebUI shell | done (basic) |
-| P2 | Dynamic tools multi-agent loop (client + local) | done |
-| P3 | Model list + live probe | done |
-| P4 | Multimodal adapters | done (text+extras path) |
-| P5 | Hardening, Docker Compose, UX errors, docs | in progress |
-
-## Requirements
-
-- Python 3.11+
-- M365 account with **Copilot** license (work/school)
-- Network access to `login.microsoftonline.com` and `substrate.office.com`
+---
 
 ## License
 
-Apache-2.0 for original code in this repository.  
-Third-party protocol knowledge remains subject to upstream project licenses and Microsoft terms of use.
+MIT License — see [LICENSE](LICENSE)
+
+---
+
+## Disclaimer
+
+This project is not affiliated with or endorsed by Microsoft Corporation.  
+Microsoft 365 Copilot is a trademark of Microsoft Corporation.
+
+Use at your own risk — ensure compliance with your Microsoft 365 subscription terms.

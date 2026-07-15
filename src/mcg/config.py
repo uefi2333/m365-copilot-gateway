@@ -54,6 +54,11 @@ class TokenConfig(BaseModel):
     oauth_client_secret: str | None = None
 
 
+class RateLimitConfig(BaseModel):
+    enabled: bool = False
+    requests_per_minute: int = 60
+    burst: int = 10
+
 class PoolConfig(BaseModel):
     strategy: Literal["round_robin", "sticky", "least_load"] = "round_robin"
     cooldown_sec: int = 60
@@ -95,6 +100,7 @@ class AppConfig(BaseModel):
     pool: PoolConfig = Field(default_factory=PoolConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
 
 def load_config(path: str | Path | None = None) -> AppConfig:

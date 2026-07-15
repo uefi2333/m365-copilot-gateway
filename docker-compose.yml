@@ -3,6 +3,10 @@
 #   cp config.example.yaml config.yaml   # edit api_keys / admin_password
 #   docker compose up -d --build
 #   open http://127.0.0.1:8080/ui
+#
+# Production TLS (Let's Encrypt):
+#   docker compose --profile tls up -d
+#   Requires: Caddyfile with your domain, DNS pointing to server, ports 80/443 open
 
 services:
   mcg:
@@ -16,7 +20,6 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
     environment:
-      # optional overrides
       TZ: Asia/Shanghai
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health')"]
@@ -24,3 +27,22 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # Auto TLS via Caddy (Let's Encrypt) — enable with: docker compose --profile tls up -d
+  caddy:
+    profile: tls
+    image: caddy:2-alpine
+    container_name: mcg-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      mcg:
+        condition: service_healthy
+
+volumes:
+  caddy_data:

@@ -44,6 +44,14 @@ pool:
   cooldown_sec: 60
   max_consecutive_errors: 3
 
+rate_limit:
+  # disabled by default; enable for production deployments
+  enabled: false
+  # requests per minute per API key (or per IP for unauthenticated requests)
+  requests_per_minute: 60
+  # burst window allowlist size
+  burst: 10
+
 tools:
   # max model↔tool rounds inside one client request
   max_rounds: 8

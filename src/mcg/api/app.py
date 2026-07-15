@@ -119,6 +119,11 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     async def _shutdown_keepalive() -> None:
         await keepalive.stop()
 
+    if cfg.rate_limit.enabled:
+        from mcg.api.rate_limit import RateLimitMiddleware
+
+        app.add_middleware(RateLimitMiddleware, cfg=cfg.rate_limit)
+
     if cfg.gateway.cors_origins:
         app.add_middleware(
             CORSMiddleware,

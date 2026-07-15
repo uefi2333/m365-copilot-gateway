@@ -1,0 +1,25 @@
+# M365 Copilot Gateway — Caddy reverse proxy with auto TLS
+# Usage:
+#   docker compose --profile tls up -d
+#   Edit the domain below to your actual domain (DNS must point to server)
+
+copilot.uefi233.bond {
+    reverse_proxy mcg:8080
+
+    # Security headers
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        X-XSS-Protection "1; mode=block"
+    }
+
+    # Rate limiting at proxy level
+    rate_limit {
+        zone dynamic {
+            key {remote_host}
+            events 60
+            window 1m
+        }
+    }
+}
