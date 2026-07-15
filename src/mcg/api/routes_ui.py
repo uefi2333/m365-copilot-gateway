@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
+from mcg.config import AppConfig, save_config
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -228,3 +229,97 @@ async def ui_browser_login(request: Request, label: str = Form("")):
     except Exception as exc:  # noqa: BLE001
         return RedirectResponse(f"/ui?err=cdp&msg={exc}", status_code=303)
     return RedirectResponse("/ui?ok=cdp", status_code=303)
+
+
+# ── Settings (read + write config.yaml) ──────────────────────────────
+
+SETTABLE_SECTIONS = {
+    "rate_limit": ["enabled", "requests_per_minute", "burst"],
+    "pool": ["strategy", "cooldown_sec", "max_consecutive_errors"],
+    "tools": ["max_rounds", "repair_rounds", "execution"],
+    "gateway": ["api_keys", "admin_password", "cors_origins"],
+}
+
+
+@router.get("/ui/settings", response_class=HTMLResponse)
+async def ui_settings(request: Request):
+    if not _require_ui(request):
+        return RedirectResponse("/ui?err=auth", status_code=303)
+    cfg = request.app.state.config
+    authed = _authed(request)
+    # Flatten for template
+    flattened = {}
+    for section, keys in SETTABLE_SECTIONS.items():
+        obj = getattr(cfg, section, None)
+        if obj is None:
+            continue
+        for k in keys:
+            val = getattr(obj, k, None)
+            # convert lists to comma-separated for form display
+            if isinstance(val, list):
+                val = ", ".join(str(v) for v in val)
+            flattened[f"{section}.{k}"] = val
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "authed": authed,
+            "config": flattened,
+            "sections": list(SETTABLE_SECTIONS.keys()),
+            "config_path": request.app.state.config_path,
+            "err": request.query_params.get("err"),
+            "ok": request.query_params.get("ok"),
+        },
+    )
+
+
+@router.post("/ui/settings/save")
+async def ui_settings_save(request: Request):
+    if not _require_ui(request):
+        return RedirectResponse("/ui?err=auth", status_code=303)
+    form = await request.form()
+    cfg: AppConfig = request.app.state.config
+
+    for section, keys in SETTABLE_SECTIONS.items():
+        obj = getattr(cfg, section, None)
+        if obj is None:
+            continue
+        for k in keys:
+            key = f"{section}.{k}"
+            if key not in form:
+                continue
+            raw = form[key].strip()
+            current = getattr(obj, k, None)
+            # Determine type from current value
+            if isinstance(current, bool):
+                setattr(obj, k, raw.lower() in ("true", "1", "yes"))
+            elif isinstance(current, int):
+                try:
+                    setattr(obj, k, int(raw))
+                except (ValueError, TypeError):
+                    pass
+            elif isinstance(current, list):
+                parts = [x.strip() for x in raw.split(",") if x.strip()]
+                setattr(obj, k, parts)
+            elif isinstance(current, str):
+                setattr(obj, k, raw)
+
+    # Also accept api_keys as JSON array if posted separately
+    api_keys_raw = form.get("gateway.api_keys_raw", "")
+    if api_keys_raw.strip():
+        import json as _json
+        try:
+            parsed = _json.loads(api_keys_raw.strip())
+            if isinstance(parsed, list):
+                cfg.gateway.api_keys = [str(x) for x in parsed]
+        except (_json.JSONDecodeError, TypeError):
+            pass
+
+    # Write back
+    config_path = request.app.state.config_path
+    try:
+        from pathlib import Path as _Path
+        save_config(cfg, _Path(config_path))
+        return RedirectResponse("/ui/settings?ok=saved", status_code=303)
+    except Exception as exc:
+        return RedirectResponse(f"/ui/settings?err=write&msg={exc}", status_code=303)

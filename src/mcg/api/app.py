@@ -67,6 +67,7 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
 
     app = FastAPI(title="M365 Copilot Gateway", version="0.2.0")
     app.state.config = cfg
+    app.state.config_path = str(config_path) if config_path else (Path("config.yaml").resolve())
     app.state.fabric = fabric
     app.state.pool = pool
     app.state.models = models
@@ -132,6 +133,13 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
             allow_methods=["*"],
             allow_headers=["*"],
         )
+
+    # Root → WebUI redirect
+    from fastapi.responses import RedirectResponse
+
+    @app.get("/", include_in_schema=False)
+    async def root_to_ui():
+        return RedirectResponse(url="/ui")
 
     app.include_router(openai_router)
     app.include_router(anthropic_router)

@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MCG · 设置</title>
+  <style>
+    :root {
+      --bg: #0b0d10;
+      --panel: #12151a;
+      --line: #1e2430;
+      --text: #e8eaed;
+      --dim: #8b93a7;
+      --accent: #5b8def;
+      --good: #34c759;
+      --bad: #ff5c5c;
+      --radius: 10px;
+      --font: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.5 var(--font);
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    header {
+      height: 56px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 28px;
+      background: rgba(18, 21, 26, 0.9);
+      backdrop-filter: blur(8px);
+      position: sticky;
+      top: 0;
+      z-index: 20;
+    }
+    .brand { display: flex; align-items: baseline; gap: 10px; font-weight: 600; letter-spacing: 0.02em; }
+    .brand span { color: var(--dim); font-weight: 400; font-size: 12px; }
+    nav { display: flex; align-items: center; gap: 18px; }
+    nav a { font-size: 13px; color: var(--dim); }
+    nav a.active { color: var(--text); font-weight: 500; }
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 28px 20px 64px;
+    }
+    .flash {
+      padding: 10px 16px;
+      border-radius: var(--radius);
+      margin-bottom: 16px;
+      font-size: 13px;
+    }
+    .flash.ok { background: rgba(52, 199, 89, 0.12); border: 1px solid rgba(52, 199, 89, 0.3); color: var(--good); }
+    .flash.err { background: rgba(255, 92, 92, 0.12); border: 1px solid rgba(255, 92, 92, 0.3); color: var(--bad); }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      margin-bottom: 16px;
+    }
+    section h2 {
+      margin: 0 0 16px;
+      font-size: 14px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--dim);
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-bottom: 14px;
+    }
+    .field label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--dim);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .field input, .field select {
+      background: var(--bg);
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--text);
+      font: 13px var(--mono);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    .field input:focus, .field select:focus {
+      border-color: var(--accent);
+    }
+    .field .hint {
+      font-size: 11px;
+      color: var(--dim);
+      margin-top: 2px;
+    }
+    .field-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+    }
+    @media (max-width: 600px) {
+      .field-row { grid-template-columns: 1fr; }
+    }
+    .actions {
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 20px;
+      border-radius: 6px;
+      font: 13px/1 var(--font);
+      font-weight: 500;
+      cursor: pointer;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      transition: all 0.12s;
+    }
+    .btn:hover { border-color: var(--accent); }
+    .btn.primary {
+      background: var(--accent);
+      color: #fff;
+      border-color: var(--accent);
+    }
+    .btn.primary:hover { filter: brightness(1.12); }
+    .config-path {
+      font-size: 11px;
+      color: var(--dim);
+      text-align: center;
+      margin-top: 32px;
+      opacity: 0.6;
+    }
+    .badge {
+      display: inline-block;
+      font-size: 10px;
+      padding: 1px 7px;
+      border-radius: 4px;
+      background: rgba(139, 147, 167, 0.12);
+      color: var(--dim);
+      margin-left: 6px;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <div class="brand"><a href="/ui" style="color:inherit">MCG</a> <span>M365 Copilot Gateway</span></div>
+  <nav>
+    <a href="/ui">仪表盘</a>
+    <a href="/ui/settings" class="active">设置</a>
+  </nav>
+</header>
+<main>
+  {% if ok == "saved" %}
+    <div class="flash ok">✓ 设置已保存并写入 config.yaml（部分设置需重启生效）</div>
+  {% elif err == "write" %}
+    <div class="flash err">✗ 写入失败: {{ msg }}</div>
+  {% elif err == "auth" %}
+    <div class="flash err">请先登录</div>
+  {% endif %}
+
+  <form method="POST" action="/ui/settings/save">
+    <!-- Rate Limit -->
+    <section>
+      <h2>⚡ 限流</h2>
+      <div class="field-row">
+        <div class="field">
+          <label>enabled <span class="badge">布尔</span></label>
+          <select name="rate_limit.enabled">
+            <option value="true" {% if config["rate_limit.enabled"] == True %}selected{% endif %}>开启</option>
+            <option value="false" {% if config["rate_limit.enabled"] == False %}selected{% endif %}>关闭</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>requests_per_minute <span class="badge">整数</span></label>
+          <input name="rate_limit.requests_per_minute" value="{{ config.get('rate_limit.requests_per_minute', 60) }}" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>burst <span class="badge">整数</span></label>
+          <input name="rate_limit.burst" value="{{ config.get('rate_limit.burst', 10) }}" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Pool -->
+    <section>
+      <h2>🎯 号池策略</h2>
+      <div class="field-row">
+        <div class="field">
+          <label>strategy <span class="badge">枚举</span></label>
+          <select name="pool.strategy">
+            <option value="round_robin" {% if config.get('pool.strategy') == 'round_robin' %}selected{% endif %}>Round Robin</option>
+            <option value="sticky" {% if config.get('pool.strategy') == 'sticky' %}selected{% endif %}>Sticky</option>
+            <option value="least_load" {% if config.get('pool.strategy') == 'least_load' %}selected{% endif %}>Least Load</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>cooldown_sec <span class="badge">秒</span></label>
+          <input name="pool.cooldown_sec" value="{{ config.get('pool.cooldown_sec', 60) }}" />
+        </div>
+      </div>
+      <div class="field">
+        <label>max_consecutive_errors <span class="badge">整数</span></label>
+        <input name="pool.max_consecutive_errors" value="{{ config.get('pool.max_consecutive_errors', 3) }}" />
+        <div class="hint">连续错误超过此阈值后账号进入冷却</div>
+      </div>
+    </section>
+
+    <!-- Tools -->
+    <section>
+      <h2>🔧 工具调用</h2>
+      <div class="field-row">
+        <div class="field">
+          <label>execution <span class="badge">枚举</span></label>
+          <select name="tools.execution">
+            <option value="client" {% if config.get('tools.execution') == 'client' %}selected{% endif %}>Client（客户端执行）</option>
+            <option value="local" {% if config.get('tools.execution') == 'local' %}selected{% endif %}>Local（网关注入执行）</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>max_rounds <span class="badge">整数</span></label>
+          <input name="tools.max_rounds" value="{{ config.get('tools.max_rounds', 8) }}" />
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>repair_rounds <span class="badge">整数</span></label>
+          <input name="tools.repair_rounds" value="{{ config.get('tools.repair_rounds', 1) }}" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Gateway -->
+    <section>
+      <h2>🔑 网关安全</h2>
+      <div class="field">
+        <label>admin_password <span class="badge">字符串</span></label>
+        <input name="gateway.admin_password" type="password" value="{{ config.get('gateway.admin_password', '') }}" />
+        <div class="hint">WebUI 管理密码</div>
+      </div>
+      <div class="field">
+        <label>api_keys <span class="badge">逗号分隔</span></label>
+        <input name="gateway.api_keys" value="{{ config.get('gateway.api_keys', '') }}" />
+        <input type="hidden" name="gateway.api_keys_raw" value="" />
+        <div class="hint">多个 key 用逗号分隔。修改后客户端需要更新 API Key。</div>
+      </div>
+      <div class="field">
+        <label>cors_origins <span class="badge">逗号分隔</span></label>
+        <input name="gateway.cors_origins" value="{{ config.get('gateway.cors_origins', '') }}" />
+        <div class="hint">允许的跨域来源，如 http://localhost:3000</div>
+      </div>
+    </section>
+
+    <div class="actions">
+      <a href="/ui" class="btn">取消</a>
+      <button type="submit" class="btn primary">保存设置</button>
+    </div>
+  </form>
+
+  <div class="config-path">配置文件: {{ config_path }}</div>
+</main>
+</body>
+</html>

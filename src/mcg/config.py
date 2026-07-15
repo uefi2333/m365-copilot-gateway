@@ -116,6 +116,28 @@ def load_config(path: str | Path | None = None) -> AppConfig:
     return AppConfig.model_validate(raw)
 
 
+def save_config(cfg: AppConfig, path: str | Path) -> None:
+    """Dump AppConfig back to YAML, preserving section order and comments where possible."""
+    raw: dict[str, Any] = {}
+    for section in ("gateway", "substrate", "token", "rate_limit", "pool", "tools", "models"):
+        val = getattr(cfg, section, None)
+        if val is None:
+            continue
+        d = val.model_dump(exclude_none=True, exclude_unset=False)
+        # Remove empty defaults for cleaner output
+        if section == "gateway" and d.get("api_keys") == []:
+            d.pop("api_keys", None)
+        if section == "rate_limit" and d.get("enabled") is False:
+            pass  # keep default for visibility
+        if section == "pool" and d.get("strategy") == "round_robin":
+            pass
+        if section == "tools" and d.get("execution") == "client":
+            pass
+        raw[section] = d
+    p = Path(path)
+    p.write_text(yaml.dump(raw, default_flow_style=False, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
 class EnvSettings(BaseSettings):
     mcg_config: str = "config.yaml"
     mcg_data_dir: str | None = None
