@@ -54,6 +54,8 @@ class StreamToolAccumulator:
         self.full_parts: list[str] = []
         self._buf = ""
         self._in_fence = False
+        # True once a full ```tool ...``` fence was seen — caller may abort WS early.
+        self.got_tool_fence = False
 
     @property
     def full(self) -> str:
@@ -92,6 +94,7 @@ class StreamToolAccumulator:
                     block, self.tool_names, self._SHELL_LANGS
                 ):
                     # withhold tool fence from content stream
+                    self.got_tool_fence = True
                     self._buf = rest
                     self._in_fence = False
                     continue

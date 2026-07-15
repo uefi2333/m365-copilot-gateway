@@ -199,47 +199,28 @@ async def chat_completions(
     sessions = request.app.state.sessions
     local_runner = getattr(request.app.state, "local_runner", None)
 
-    try:
-        account = pool.acquire(sticky_key=body.user)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-
-    fabric = request.app.state.fabric
-    try:
-        live = await fabric.ensure(
-            account.id,
-            fallback_token=account.token,
-            allow_cdp=cfg.token.prefer_cdp,
-            profile_path=account.profile_path or None,
-        )
-        if live != account.token:
-            pool.refresh_token(account.id, live)
-            account = pool.accounts[account.id]
-    except RuntimeError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-
+    # --- FAST PATH: pure tool short-circuit / hop2 before token+substrate ---
+    # Slash skill, hop2 chain, hop2 passthrough never need live JWT or WS.
     canon = to_canonical(body)
-    # Fingerprint client (Cursor / CC / Codex / phone-lite / …)
     try:
         from mcg.tools.agents import detect_agent
-        _hdrs = {k: v for k, v in request.headers.items()}
         _prof = detect_agent(
             tools=canon.tools,
-            headers=_hdrs,
+            headers={k: v for k, v in request.headers.items()},
             user_agent=request.headers.get("user-agent"),
             path=str(request.url.path),
             model=canon.model,
         )
         canon.extra["agent_id"] = _prof.id
         canon.extra["agent_label"] = _prof.label
-        print(
-            f"[mcg.agent] id={_prof.id} tools={[t.name for t in canon.tools][:12]}",
-            flush=True,
-        )
-    except Exception as _exc:  # noqa: BLE001
-        print(f"[mcg.agent] detect failed: {_exc}", flush=True)
-    tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
-    prompt = tool_loop.augment_prompt(canon)
+    except Exception:
+        pass
+
+    # cheap sticky account id without full ensure (pool may still pick account)
+    try:
+        account = pool.acquire(sticky_key=body.user)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     # Deterministic tool short-circuit for slash/skill intents on the *latest user turn*.
     # Only short-circuit when nothing (assistant/tool) has answered that latest user msg yet.
@@ -536,6 +517,28 @@ async def chat_completions(
                 )
             )
 
+    # Need substrate from here — ensure token only when not short-circuited
+    fabric = request.app.state.fabric
+    try:
+        live = await fabric.ensure(
+            account.id,
+            fallback_token=account.token,
+            allow_cdp=cfg.token.prefer_cdp,
+            profile_path=account.profile_path or None,
+        )
+        if live != account.token:
+            pool.refresh_token(account.id, live)
+            account = pool.accounts[account.id]
+    except RuntimeError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
+    # Skip fat preamble on non-tool chat; keep compact for tools
+    if canon.tools:
+        prompt = tool_loop.augment_prompt(canon)
+    else:
+        prompt = canon.prompt_text()
+
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
 
@@ -572,6 +575,8 @@ async def chat_completions(
             origin=cfg.substrate.origin,
             time_zone=cfg.substrate.time_zone,
             timeout_sec=cfg.substrate.request_timeout_sec,
+            # tools: fail-fast handshake (15s default); plain chat keeps same
+            open_timeout_sec=12.0 if canon.tools else min(20.0, cfg.substrate.request_timeout_sec),
         )
 
         # Optional Copilot Studio agent — only when tools present (cramt §5/§10:
@@ -652,10 +657,24 @@ async def chat_completions(
                             raw_stream = client.chat_stream(prompt, **stream_kwargs)
                             if canon.tools:
                                 acc = StreamToolAccumulator(t.name for t in canon.tools)
+                                from mcg.tools.loop import try_early_tool_calls
+                                early_calls = None
                                 async for piece in raw_stream:
                                     acc.feed(piece)
+                                    # Abort Substrate stream as soon as a full tool fence is in hand
+                                    if acc.got_tool_fence:
+                                        early_calls = try_early_tool_calls(
+                                            acc.full, canon.tools
+                                        )
+                                        if early_calls:
+                                            break
                                 acc.flush()
                                 full_buf = acc.full
+                                if early_calls:
+                                    # skip waiting for type-2/3 tail + repair hop
+                                    parsed_early = type("P", (), {})()
+                                    # use early path below via full_buf still parseable
+                                    full_buf = acc.full
                             else:
                                 parts: list[str] = []
                                 async for piece in raw_stream:
@@ -771,7 +790,19 @@ async def chat_completions(
         last_err: Exception | None = None
         for attempt in range(3):
             try:
-                full = await client.chat(prompt, **stream_kwargs)
+                if canon.tools:
+                    # Early-exit when tool fence complete (don't wait model epilogue)
+                    from mcg.tools.stream_filter import StreamToolAccumulator
+                    from mcg.tools.loop import try_early_tool_calls
+                    acc = StreamToolAccumulator(t.name for t in canon.tools)
+                    async for piece in client.chat_stream(prompt, **stream_kwargs):
+                        acc.feed(piece)
+                        if acc.got_tool_fence and try_early_tool_calls(acc.full, canon.tools):
+                            break
+                    acc.flush()
+                    full = acc.full
+                else:
+                    full = await client.chat(prompt, **stream_kwargs)
                 last_err = None
                 break
             except Exception as exc:  # noqa: BLE001

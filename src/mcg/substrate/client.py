@@ -84,6 +84,7 @@ class SubstrateClient:
         origin: str = "https://m365.cloud.microsoft",
         time_zone: str = "Asia/Shanghai",
         timeout_sec: float = 120.0,
+        open_timeout_sec: float | None = None,
     ) -> None:
         if not access_token:
             raise SubstrateError("access_token is empty")
@@ -101,6 +102,7 @@ class SubstrateClient:
         self.origin = origin
         self.time_zone = time_zone
         self.timeout_sec = timeout_sec
+        self.open_timeout_sec = open_timeout_sec if open_timeout_sec is not None else min(15.0, timeout_sec)
 
     async def chat_stream(
         self,
@@ -129,7 +131,7 @@ class SubstrateClient:
             async with websockets.connect(
                 url,
                 additional_headers={"Origin": self.origin},
-                open_timeout=self.timeout_sec,
+                open_timeout=self.open_timeout_sec,
                 close_timeout=10,
                 max_size=50 * 1024 * 1024,
             ) as ws:

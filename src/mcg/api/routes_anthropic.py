@@ -49,20 +49,7 @@ async def anthropic_messages(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    fabric = request.app.state.fabric
-    try:
-        live = await fabric.ensure(
-            account.id,
-            fallback_token=account.token,
-            allow_cdp=cfg.token.prefer_cdp,
-            profile_path=account.profile_path or None,
-        )
-        if live != account.token:
-            pool.refresh_token(account.id, live)
-            account = pool.accounts[account.id]
-    except RuntimeError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
-
+    # Fast path: SC/hop2 before token ensure (no JWT/WS needed)
     canon = to_canonical(body)
     # merge anthropic image parts into prompt if present
     media = canon.extra.get("anthropic_media_parts") or []
@@ -99,8 +86,6 @@ async def anthropic_messages(
     except Exception as _exc:  # noqa: BLE001
         print(f"[mcg.agent] detect failed: {_exc}", flush=True)
         _prof = None
-
-    tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
 
     # Slash / skill short-circuit (same policy as OpenAI path)
     from mcg.tools.platform_adapt import should_short_circuit
@@ -240,7 +225,22 @@ async def anthropic_messages(
                         )
                     )
 
-    prompt = tool_loop.augment_prompt(canon)
+    fabric = request.app.state.fabric
+    try:
+        live = await fabric.ensure(
+            account.id,
+            fallback_token=account.token,
+            allow_cdp=cfg.token.prefer_cdp,
+            profile_path=account.profile_path or None,
+        )
+        if live != account.token:
+            pool.refresh_token(account.id, live)
+            account = pool.accounts[account.id]
+    except RuntimeError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
+    prompt = tool_loop.augment_prompt(canon) if canon.tools else canon.prompt_text()
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
 
@@ -255,6 +255,8 @@ async def anthropic_messages(
             origin=cfg.substrate.origin,
             time_zone=cfg.substrate.time_zone,
             timeout_sec=cfg.substrate.request_timeout_sec,
+            # tools: fail-fast handshake (15s default); plain chat keeps same
+            open_timeout_sec=12.0 if canon.tools else min(20.0, cfg.substrate.request_timeout_sec),
         )
         stream_kwargs = dict(
             tone=tone,

@@ -91,6 +91,16 @@ def _make_call(name: str, arguments: dict[str, Any] | str) -> dict[str, Any]:
     }
 
 
+def try_early_tool_calls(text: str, tools: list[CanonicalTool]) -> list[dict[str, Any]] | None:
+    """If text already contains a complete tool fence/JSON, return tool_calls (no wait)."""
+    if not text or not tools:
+        return None
+    parsed = parse_tool_calls_from_text(text, tools)
+    if parsed.tool_calls:
+        return parsed.tool_calls
+    return None
+
+
 def parse_tool_calls_from_text(text: str, tools: list[CanonicalTool]) -> ParsedTools:
     """Parse model output into OpenAI-shaped tool_calls. Independent reimplementation."""
     names = {t.name for t in tools}

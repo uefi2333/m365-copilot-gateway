@@ -37,15 +37,17 @@ def build_tool_preamble(
     # Compact: reasoning models treat long preambles as analysis targets
     lines.append("TOOLS (this turn only). To act, emit ONE fence then stop.")
     for t in tools:
-        schema = json.dumps(t.parameters or {}, ensure_ascii=False, separators=(",", ":"))
-        desc = (t.description or "").strip().replace("\n", " ")[:160]
-        lines.append(f"- {t.name}: {desc}")
-        lines.append(f"  schema:{schema}")
+        props = (t.parameters or {}).get("properties") if isinstance(t.parameters, dict) else None
+        req = (t.parameters or {}).get("required") if isinstance(t.parameters, dict) else None
+        # compact: name + required keys only (smaller prompt → faster TTFT)
+        keys = list(req) if isinstance(req, list) and req else (list(props.keys())[:6] if isinstance(props, dict) else [])
+        desc = (t.description or "").strip().replace("\n", " ")[:80]
+        lines.append(f"- {t.name}({','.join(keys)}): {desc}")
 
     # show one sample per tool so model does not always pick tools[0]
     lines.append("")
     lines.append("FORMAT (mandatory — no prose before/after). Pick the tool that matches user intent:")
-    for t in tools[:12]:
+    for t in tools[:6]:
         params = t.parameters if isinstance(t.parameters, dict) else {}
         req = list(params.get("required") or []) if isinstance(params.get("required"), list) else []
         sample = {k: f"<{k}>" for k in req} if req else {}
