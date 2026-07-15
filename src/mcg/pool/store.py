@@ -59,7 +59,7 @@ class AccountPool:
         *,
         strategy: str = "round_robin",
         cooldown_sec: int = 60,
-        max_consecutive_errors: int = 3,
+        max_consecutive_errors: int = 8,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
@@ -227,5 +227,11 @@ class AccountPool:
         self.save()
 
     def mark_soft_error(self, account_id: str) -> None:
-        """Alias: same policy as mark_error (no instant ban)."""
-        self.mark_error(account_id, cooldown=False)
+        """Transient upstream flake — half weight toward cooldown."""
+        acc = self.accounts[account_id]
+        # every other soft error counts as one hard error unit
+        acc.meta["_soft"] = int(acc.meta.get("_soft") or 0) + 1
+        if acc.meta["_soft"] % 2 == 0:
+            self.mark_error(account_id, cooldown=False)
+        else:
+            self.save()

@@ -706,7 +706,7 @@ async def chat_completions(
                     if last_err is not None and not full_buf:
                         # tools: degrade to synthetic tool_call instead of HTML 500
                         if canon.tools:
-                            from mcg.tools.repair import force_tool_call
+                            from mcg.tools.repair import force_tool_call, is_plain_chat
 
                             user_text = "\n".join(
                                 m.content
@@ -717,18 +717,27 @@ async def chat_completions(
                                 canon.tools, user_text=user_text
                             )
                             log.error(
-                                "stream disengage fallback tools err=%s", last_err
+                                "stream disengage fallback tools err=%s force=%s",
+                                last_err,
+                                [c.get("function", {}).get("name") for c in tool_holder],
                             )
-                            pool.mark_soft_error(account.id)
+                            # disengage is upstream flake — do NOT burn pool errors when
+                            # we already have a clean synthetic path or plain chat
+                            if not tool_holder and not is_plain_chat(user_text):
+                                pool.mark_soft_error(account.id)
 
-                            async def _empty():
+                            async def _text_or_empty():
+                                if not tool_holder:
+                                    # plain chat or unclear intent: surface soft error text
+                                    yield f"(upstream busy: {str(last_err)[:120]})"
+                                    return
                                 if False:
                                     yield ""
 
                             async for sse in stream_openai_chunks(
                                 model=canon.model,
-                                text_iter=_empty(),
-                                tool_calls_holder=tool_holder,
+                                text_iter=_text_or_empty(),
+                                tool_calls_holder=tool_holder or None,
                                 conversation_id=cur_sess.conversation_id,
                             ):
                                 yield sse
@@ -829,18 +838,24 @@ async def chat_completions(
         if last_err is not None and not full:
             # tool clients: never hard-fail with 502 if we can synthesize a call
             if canon.tools:
-                from mcg.tools.repair import force_tool_call
+                from mcg.tools.repair import force_tool_call, is_plain_chat
 
                 user_text = "\n".join(
                     m.content for m in canon.messages if m.role == "user" and m.content
                 )
-                log.error("chat disengage fallback tools err=%s", last_err)
-                pool.mark_soft_error(account.id)
+                forced = force_tool_call(canon.tools, user_text=user_text)
+                log.error(
+                    "chat disengage fallback tools err=%s force=%s",
+                    last_err,
+                    [c.get("function", {}).get("name") for c in forced],
+                )
+                if not forced and not is_plain_chat(user_text):
+                    pool.mark_soft_error(account.id)
                 return JSONResponse(
                     final_openai_response(
                         model=canon.model,
-                        content=None,
-                        tool_calls=force_tool_call(canon.tools, user_text=user_text),
+                        content=None if forced else f"(upstream busy: {str(last_err)[:120]})",
+                        tool_calls=forced or None,
                         conversation_id=sess.conversation_id,
                     )
                 )

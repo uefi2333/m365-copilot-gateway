@@ -269,24 +269,61 @@ def _score_tool(tool: CanonicalTool, user_text: str) -> float:
     if wants_time and is_time:
         score += 40.0
 
+    wants_write = bool(
+        re.search(r"写(?:一个|个|入|文件|到)?|write|create\s*file|保存|新建.*文件", blob_l)
+    )
+    is_write = bool(re.search(r"write|save|create_file|写", name_l + " " + desc)) or (
+        family_of(tool.name) == "write"
+    )
+    if wants_write and is_write:
+        score += 45.0
+    if wants_write and is_search and not wants_search:
+        score -= 30.0
+
     # tiny bias for zero-required ONLY as tie-breaker, never primary
     if not _required_keys(tool):
         score += 0.5
     return score
 
 
-def pick_tool(tools: list[CanonicalTool], user_text: str = "") -> CanonicalTool:
-    if len(tools) == 1:
-        return tools[0]
+_CHATTY_RE = re.compile(
+    r"(?is)^\s*(?:"
+    r"你好|您好|嗨|哈喽|在吗|在不在|早上好|晚上好|下午好|"
+    r"hi|hello|hey|yo|sup|good\s*(?:morning|evening|afternoon)|"
+    r"thanks?|thank\s*you|谢谢|多谢|ok|okay|好的|嗯|哦|啊|"
+    r"测试|test|ping|pong|你是谁|你叫什么"
+    r")[.!！?？。…\s]*$"
+)
+
+
+def is_plain_chat(user_text: str) -> bool:
+    """True when user is just chatting — do NOT force any tool."""
+    blob = (user_text or "").strip()
+    if not blob:
+        return True
+    if blob.startswith("/"):
+        return False
+    if _CHATTY_RE.match(blob):
+        return True
+    # very short with no tool-ish keywords
+    if len(blob) <= 6 and not re.search(
+        r"工具|tool|搜索|search|写|write|bash|shell|skill|技能|新闻|news|部署|setup",
+        blob,
+        re.I,
+    ):
+        return True
+    return False
+
+
+def pick_tool(tools: list[CanonicalTool], user_text: str = "") -> CanonicalTool | None:
+    if not tools:
+        return None
     ranked = sorted(tools, key=lambda t: _score_tool(t, user_text), reverse=True)
     best = ranked[0]
-    # if everything scores ~0, prefer non-time tool with search-ish name else first
-    if _score_tool(best, user_text) < 1.0:
-        for t in tools:
-            n = (t.name + " " + (t.description or "")).lower()
-            if not re.search(r"time|date|clock|时间", n):
-                return t
-        return tools[0]
+    best_score = _score_tool(best, user_text)
+    # No signal at all → refuse to invent a tool (was: always pick search/first)
+    if best_score < 5.0:
+        return None
     return best
 
 
@@ -295,16 +332,19 @@ def force_tool_call(
     *,
     user_text: str = "",
 ) -> list[dict[str, Any]]:
-    """Emit a tool call. Multi-platform: skill router, scored pick, arg remap."""
+    """Emit a tool call only when intent is clear. Greetings → []."""
     if not tools:
+        return []
+    if is_plain_chat(user_text):
         return []
     # 1) /story-setup or skill mention with use_skill present
     routed = resolve_forced_call(tools, user_text)
     if routed:
         return [routed]
-    # 2) scored pick among non-router tools when user named a concrete tool;
-    #    routers still eligible if that's all that matches.
+    # 2) scored pick — None when score too low (no hijack to search_web)
     pick = pick_tool(tools, user_text)
+    if pick is None:
+        return []
     args = _guess_args(pick, user_text)
     args = adapt_args_for_tool(pick, args)
     # skill router without extractable skill name: still try slash
@@ -313,6 +353,8 @@ def force_tool_call(
         skill = extract_skill_name(user_text, tools)
         if skill:
             return [make_skill_router_call(pick, skill)]
+        # bare skill router without a skill name is not useful
+        return []
     return [
         {
             "id": f"call_{uuid.uuid4().hex[:20]}",
