@@ -1,61 +1,45 @@
-# Token acquisition (lightweight first)
+# Token acquisition — what actually works
 
-## Default path — no Chrome
+## Live probe results (2026-07-15, this repo)
 
-| Level | Source | Needs |
-|-------|--------|--------|
-| L0 | Memory | — |
-| L1 | `data/tokens/<oid>.jwt` | paste once |
-| **L1.5** | **OAuth `refresh_token` (HTTP)** | `oauth_client_id` + stored RT |
-| L2 | CDP Chrome (optional) | `prefer_cdp: true` + browser |
-| L3 | Manual paste / device-code | phone browser OK |
+We hit `login.microsoftonline.com` from CI/sandbox **without completing interactive MFA**.
 
-### 1) Paste access JWT (simplest)
+| Step | Result |
+|------|--------|
+| Device code **START** with random/custom `client_id` | **Fail** `unauthorized_client` |
+| Device code START with first-party ids (Office `d3590ed6-…`, Azure CLI, …) + substrate-like scope | **HTTP 200** + `user_code` |
+| Device code **POLL** without user finishing `login.microsoft.com/device` | Always `authorization_pending` — **no AT/RT** |
+| `grant_type=refresh_token` with fake RT | `invalid_grant` |
+| Full user complete → AT with `aud=https://substrate.office.com/...` accepted by ChatHub | **Not proven here** (needs real MFA + Bizchat accept). Community reverse-proxies almost always use **browser-captured JWT**, not device-code OAuth. |
+
+### Hard truths
+
+1. **Device code can start** for some Microsoft first-party public clients, but that is **not** the same as “you get a legal long-lived refresh_token that ChatHub accepts.”
+2. **Your own Entra app** cannot simply declare `https://substrate.office.com/ows/.default` the way you do for Graph. Substrate is a first-party resource; third-party apps typically get `invalid_scope` / consent failures.
+3. **First-party client_id reuse** (Office/Azure CLI) for automation is fragile, against Microsoft ToS, and may yield tokens whose `aud`/claims still fail Bizchat/ChatHub.
+4. **What production gateways actually use today**
+   - **L1:** paste / CDP-sniff `access_token` from browser ChatHub WS (TTL ~1h)
+   - **Optional:** keep browser session cookies / CDP re-open to mint a new AT
+   - **Not reliable as default:** pure device-code → refresh_token → silent forever for Substrate Copilot
+
+## Recommended default (honest)
 
 ```bash
-# DevTools → Network → WS `substrate.office.com` → copy access_token=
-echo 'eyJ...' | mcg import-token - --label alice
-
-# optional: also store refresh_token for silent renew
-mcg import-token token.jwt --label alice --refresh-token rt.txt
-mcg set-refresh-token <oid> rt.txt
+# Still the reliable path
+echo "$JWT" | mcg import-token - --label alice
+# re-paste when TTL low, or use optional CDP on a machine that has a browser
 ```
 
-### 2) Silent renew (HTTP only)
-
 ```yaml
-# config.yaml
 token:
   prefer_cdp: false
-  oauth_client_id: "<your-entra-app-client-id>"
-  oauth_tenant: "common"   # or your tenant id
-  oauth_scope: "https://substrate.office.com/ows/.default offline_access openid profile"
+  # oauth_* is experimental / only if YOU verified AT aud against ChatHub
+  oauth_client_id: null
 ```
 
-```bash
-mcg refresh-token <oid>
-```
+## Experimental OAuth (disabled claims)
 
-Gateway `fabric.ensure()` uses refresh_token automatically when access JWT is near expiry.
+`mcg device-login` / `refresh_token` storage remain in the tree for operators who **bring their own working client_id + proven substrate AT**.  
+Gateway will **not** advertise them as “works out of the box.”
 
-> Your Entra app must be allowed to request the substrate resource. Many personal setups just paste a fresh JWT periodically if app registration is not available.
-
-### 3) Device code (still no local Chrome)
-
-```bash
-mcg device-login --label alice
-# print verification_uri + user_code → open on phone
-```
-
-### 4) Optional CDP (heavy)
-
-```yaml
-token:
-  prefer_cdp: true
-```
-
-```bash
-mcg browser-login --label alice
-```
-
-Requires Chrome/Edge binary. Not recommended for servers.
+See probe script: `scripts/probe_oauth_device.py`.

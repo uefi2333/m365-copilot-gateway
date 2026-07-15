@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> None:
 
     p_dev = sub.add_parser(
         "device-login",
-        help="OAuth device code login (open URL on phone; no local Chrome)",
+        help="EXPERIMENTAL OAuth device code (may not yield ChatHub-valid substrate JWT)",
     )
     p_dev.add_argument("--label", default="")
     p_dev.add_argument("--id", dest="account_id", default=None)
@@ -120,6 +120,16 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.cmd == "device-login":
+        print(
+            "WARNING: device-login is EXPERIMENTAL.\n"
+            "Probes: device_code START may work for some first-party client_ids;\n"
+            "without user MFA you get no AT/RT; ChatHub-valid RT→AT is NOT guaranteed.\n"
+            "Reliable path: mcg import-token (paste browser JWT). See docs/TOKEN_CDP.md",
+            file=sys.stderr,
+        )
+        if not fabric.oauth_client_id:
+            print("FAILED: set token.oauth_client_id (custom apps usually cannot get substrate).", file=sys.stderr)
+            sys.exit(2)
         account_id = args.account_id or f"pending-{uuid.uuid4().hex[:10]}"
 
         def on_status(msg: str) -> None:
