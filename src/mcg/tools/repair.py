@@ -469,6 +469,50 @@ def needs_tool_chain(canon: CanonicalRequest) -> bool:
     return False
 
 
+def _pick_family(candidates: list[CanonicalTool], fam: str) -> CanonicalTool | None:
+    """Prefer real local tools over false-positive family matches."""
+    hits = [t for t in candidates if family_of(t.name) == fam]
+    if not hits:
+        return None
+    if fam == "shell":
+        def shell_rank(t: CanonicalTool) -> float:
+            n = (t.name or "").lower()
+            score = 0.0
+            if any(k in n for k in ("bash", "shell", "terminal", "execute_shell", "run_terminal", "local_shell")):
+                score += 100
+            if n in ("bash", "shell", "sh"):
+                score += 50
+            # has command param
+            props = (t.parameters or {}).get("properties") if isinstance(t.parameters, dict) else {}
+            if isinstance(props, dict) and any(k in props for k in ("command", "cmd", "script")):
+                score += 40
+            # github / cloud names hard demote
+            if any(k in n for k in ("push_files", "github", "pull_request", "repository", "vercel", "email")):
+                score -= 200
+            return score
+        hits.sort(key=shell_rank, reverse=True)
+        if shell_rank(hits[0]) <= 0:
+            return None
+        return hits[0]
+    if fam == "write":
+        def write_rank(t: CanonicalTool) -> float:
+            n = (t.name or "").lower()
+            score = 0.0
+            if any(k in n for k in ("write", "create_file", "file_write", "write_to_file")):
+                score += 100
+            if any(k in n for k in ("push_files", "github", "pull_request", "repository")):
+                score -= 200
+            props = (t.parameters or {}).get("properties") if isinstance(t.parameters, dict) else {}
+            if isinstance(props, dict) and any(k in props for k in ("path", "file_path", "content")):
+                score += 30
+            return score
+        hits.sort(key=write_rank, reverse=True)
+        if write_rank(hits[0]) <= 0:
+            return None
+        return hits[0]
+    return hits[0]
+
+
 def force_chain_tool_call(canon: CanonicalRequest) -> list[dict[str, Any]]:
     """After skill load, force the first concrete action tool (Write/Bash preferred)."""
     user_text = _user_blob(canon)
@@ -477,8 +521,8 @@ def force_chain_tool_call(canon: CanonicalRequest) -> list[dict[str, Any]]:
     if not candidates:
         candidates = list(canon.tools)
 
-    shell = next((t for t in candidates if family_of(t.name) == "shell"), None)
-    write = next((t for t in candidates if family_of(t.name) == "write"), None)
+    shell = _pick_family(candidates, "shell")
+    write = _pick_family(candidates, "write")
     skillish = any(
         k in (result_blob or "").lower()
         for k in ("story-setup", "claude.md", ".claude/", "部署", "phase")

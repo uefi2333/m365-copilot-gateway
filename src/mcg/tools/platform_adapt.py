@@ -150,24 +150,95 @@ def _norm_name(name: str) -> str:
     return re.sub(r"[^a-z0-9\u4e00-\u9fff]+", "", (name or "").lower())
 
 
+# Keys too short for substring match — exact / token only.
+_SHORT_ALIAS_KEYS = frozenset(
+    k for k in _FAMILY_ALIASES if len(k) <= 3 or k in {"cmd", "ps1", "sh", "zsh"}
+)
+# Never classify these as shell/write via fuzzy match (GitHub / cloud APIs).
+_NEVER_SHELL = frozenset(
+    {
+        "push_files",
+        "pushfiles",
+        "create_or_update_file",
+        "createorupdatefile",
+        "create_repository",
+        "createrepository",
+        "fork_repository",
+        "create_pull_request",
+        "create_issue",
+        "merge_pull_request",
+        "search_repositories",
+        "search_code",
+        "get_file_contents",
+        "list_commits",
+        "list_issues",
+        "send_email",
+        "deploy_to_vercel",
+    }
+)
+
+
 def family_of(tool_name: str) -> str | None:
+    """Map tool name → family. Exact first; no short-key substring hijack.
+
+    Bug this kills: alias `sh` matched inside `push_files` → shell.
+    Alias-ish `date` matched `create_or_update_file` → time.
+    """
     n = (tool_name or "").strip()
     if not n:
         return None
     low = n.lower()
+    nn = _norm_name(n)
+
+    # hard denylist before fuzzy
+    if low in _NEVER_SHELL or nn in _NEVER_SHELL:
+        # github file ops are NOT local write/shell
+        if "file" in low or "push" in low or "update" in low:
+            return "github"
+        return "github"
+
     if low in _FAMILY_ALIASES:
         return _FAMILY_ALIASES[low]
-    nn = _norm_name(n)
     if nn in _FAMILY_ALIASES:
         return _FAMILY_ALIASES[nn]
+
+    # token / whole-word style: only long keys (>=4) may substring-match
     for key, fam in _FAMILY_ALIASES.items():
-        if key and (key in low or key in nn):
+        if not key or key in _SHORT_ALIAS_KEYS:
+            continue
+        if len(key) < 4:
+            continue
+        # word-ish: key as whole token in name, or name is key-prefixed
+        if key == low or key == nn:
             return fam
+        if low.startswith(key + "_") or low.endswith("_" + key) or f"_{key}_" in low:
+            return fam
+        if nn.startswith(key) or nn.endswith(key):
+            # require key length >= 5 for endswith to avoid `cmd` leftovers
+            if len(key) >= 5:
+                return fam
+        # chinese / long descriptive names
+        if len(key) >= 5 and (key in low or key in nn):
+            return fam
+
+    # explicit astrbot / local runners
+    if "astrbot_execute_shell" in low or low.endswith("_shell") or low == "shell":
+        return "shell"
+    if "astrbot_file_write" in low or low.endswith("_write_tool"):
+        return "write"
+    if "astrbot_file_read" in low or low.endswith("_read_tool"):
+        return "read"
+    if "astrbot_file_edit" in low or low.endswith("_edit_tool"):
+        return "edit"
+
     if "skill" in low:
         return "skill_router"
-    if any(k in low for k in ("search", "tavily", "搜")):
+    if any(k in low for k in ("tavily", "web_search", "websearch", "search_web")):
         return "web_search"
-    if any(k in low for k in ("time", "date", "时间", "日期")):
+    # time tools: whole-name only, never substring of create_or_update_file
+    if low in {"time", "date", "datetime", "clock"} or any(
+        k in low for k in ("current_time", "get_time", "获取时间", "当前时间")
+    ):
         return "time"
     return None
 
