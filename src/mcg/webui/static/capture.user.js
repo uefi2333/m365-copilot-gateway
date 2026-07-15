@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MCG Substrate Token Capture
 // @namespace    https://github.com/uefi2333/m365-copilot-gateway
-// @version      1.1.0
+// @version      1.2.0
 // @description  Capture ONLY Substrate ChatHub JWT (aud substrate.office.com) — ignores config.office tokens
 // @match        https://m365.cloud.microsoft/*
 // @match        https://*.cloud.microsoft/*
@@ -32,23 +32,39 @@
   function decodeJwt(token) {
     if (!token || !token.startsWith("eyJ")) return null;
     const parts = token.split(".");
-    if (parts.length < 2) return null;
+    // JWE has 5 segments and header.enc — not usable by MCG
+    if (parts.length !== 3) return null;
     return b64urlJson(parts[1]);
   }
 
+  function isJwe(token) {
+    if (!token || !token.startsWith("eyJ")) return false;
+    const parts = token.split(".");
+    if (parts.length === 5) return true;
+    const h = b64urlJson(parts[0] || "");
+    return !!(h && h.enc);
+  }
+
   function isSubstrateToken(token) {
+    if (isJwe(token)) return false;
     const c = decodeJwt(token);
     if (!c) return false;
     const aud = String(c.aud || "");
-    // Accept sydney / substrate office audiences only
     if (aud.includes("substrate.office.com")) return true;
-    // some builds put resource in scp / only
     const scp = String(c.scp || "");
     if (scp.includes("sydney") || scp.includes("M365Chat")) return true;
     return false;
   }
 
   function classify(token) {
+    if (isJwe(token)) {
+      return {
+        ok: false,
+        label: "JWE encrypted (unusable)",
+        aud: "(encrypted — no aud)",
+        claims: {},
+      };
+    }
     const c = decodeJwt(token) || {};
     const aud = String(c.aud || "?");
     if (isSubstrateToken(token)) return { ok: true, label: "SUBSTRATE OK", aud, claims: c };
@@ -192,7 +208,11 @@
       "</div>" +
       (ok
         ? ""
-        : '<div style="color:#ffa8a8;margin-bottom:8px">这不是 ChatHub token（常见误抓 clients.config.office.net）。请打开 m365.cloud.microsoft/chat 并<strong>发一条消息</strong>，等出现 green SUBSTRATE OK 再 Copy。</div>') +
+        : '<div style="color:#ffa8a8;margin-bottom:8px">' +
+          (info.label.indexOf("JWE") >= 0
+            ? "这是<strong>加密 JWE</strong>（5 段，有 enc），不是 ChatHub 用的明文 JWT。请在 F12→Network→WS 里找 <code>wss://substrate.office.com</code>，复制 URL 里 <code>access_token=</code> 后面<strong>只有 2 个点</strong>的 eyJ…（共 3 段）。"
+            : "这不是 ChatHub token（常见误抓 clients.config.office.net）。请打开 m365.cloud.microsoft/chat 并<strong>发一条消息</strong>，等绿色 SUBSTRATE OK 再 Copy。") +
+          "</div>") +
       '<div style="display:flex;gap:6px;flex-wrap:wrap">' +
       (ok
         ? '<button id="mcg-copy" style="cursor:pointer;border:0;border-radius:6px;padding:6px 10px;background:#3d8bfd;color:#fff">Copy Substrate JWT</button>'
