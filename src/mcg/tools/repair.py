@@ -306,7 +306,7 @@ def is_plain_chat(user_text: str) -> bool:
         return True
     # very short with no tool-ish keywords
     if len(blob) <= 6 and not re.search(
-        r"工具|tool|搜索|search|写|write|bash|shell|skill|技能|新闻|news|部署|setup",
+        r"工具|tool|搜索|search|写|write|bash|shell|skill|技能|新闻|news|部署|setup|几点|时间|日期|time|date",
         blob,
         re.I,
     ):

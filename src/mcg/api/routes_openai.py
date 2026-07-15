@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from mcg.auth.deps import require_api_key
 from mcg.compat.canonical import CanonicalMessage
+from mcg.compat.reasoning import ReasoningSplitter, split_explicit_reasoning
 from mcg.compat.openai_chat import (
     OpenAIChatRequest,
     estimate_tokens,
@@ -695,6 +696,7 @@ async def chat_completions(
                 try:
                     for attempt in range(3):
                         tool_holder: list[dict[str, Any]] = []
+                        reasoning_holder: list[str] = []
                         t_stream0 = time.time()
 
                         async def live_text(
@@ -702,9 +704,24 @@ async def chat_completions(
                         ):
                             nonlocal emitted_any
                             raw = client.chat_stream(prompt, **stream_kwargs)
+                            reasoning_splitter = ReasoningSplitter()
+                            async def visible_raw():
+                                async for piece in raw:
+                                    split = reasoning_splitter.feed(piece)
+                                    if split.reasoning:
+                                        reasoning_holder.append(split.reasoning)
+                                    if split.content:
+                                        yield split.content
+                                tail = reasoning_splitter.flush()
+                                if tail.reasoning:
+                                    reasoning_holder.append(tail.reasoning)
+                                if tail.content:
+                                    yield tail.content
+
+                            filtered = visible_raw()
                             if _tools:
                                 acc = StreamToolAccumulator(t.name for t in canon.tools)
-                                async for piece in raw:
+                                async for piece in filtered:
                                     for safe in acc.feed(piece):
                                         clean = strip_reasoning_leak(safe)
                                         if clean:
@@ -734,11 +751,10 @@ async def chat_completions(
                                             emitted_any = True
                                             yield clean
                             else:
-                                async for piece in raw:
+                                async for piece in filtered:
                                     if piece:
                                         emitted_any = True
                                         yield piece
-
                         try:
                             usage = {"prompt_tokens": estimate_tokens(prompt)}
                             async for sse in stream_openai_chunks(
@@ -747,6 +763,7 @@ async def chat_completions(
                                 tool_calls_holder=tool_holder if canon.tools else None,
                                 conversation_id=cur_sess.conversation_id,
                                 usage=usage,
+                                reasoning_holder=reasoning_holder,
                             ):
                                 yield sse
                             last_err = None
@@ -909,20 +926,20 @@ async def chat_completions(
         )
         pool.mark_success(account.id)
         sessions.touch(sticky, success=True)
-        content = (
-            strip_reasoning_leak(parsed.text)
-            if parsed.tool_calls
-            else strip_reasoning_leak(parsed.text or full)
-        )
+        display_text = parsed.text if parsed.tool_calls else full
+        reasoning_split = split_explicit_reasoning(display_text)
+        content = strip_reasoning_leak(reasoning_split.content)
+        reasoning_content = reasoning_split.reasoning.strip() or None
         _usage = {
             "prompt_tokens": estimate_tokens(prompt),
-            "completion_tokens": estimate_tokens(content or ""),
+            "completion_tokens": estimate_tokens(content or "") + estimate_tokens(reasoning_content or ""),
             "total_tokens": 0,
         }
         _usage["total_tokens"] = _usage["prompt_tokens"] + _usage["completion_tokens"]
         resp = final_openai_response(
             model=canon.model,
             content=content,
+            reasoning_content=reasoning_content,
             tool_calls=parsed.tool_calls or None,
             conversation_id=sess.conversation_id,
             usage=_usage,

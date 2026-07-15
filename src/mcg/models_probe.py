@@ -84,29 +84,26 @@ async def live_probe(
     return out
 
 
-def entries_to_openai(entries: list[ProbeEntry]) -> dict[str, Any]:
-    return {
-        "object": "list",
-        "data": [
-            {
-                "id": e.id,
-                "object": "model",
-                "created": 0,
-                "owned_by": "m365-copilot-gateway",
-                "root": e.tone,
-                "permission": [],
-                "metadata": {
-                    "tone": e.tone,
-                    "label": e.label,
-                    "family": e.family,
-                    "status": e.status,
-                    "detail": e.detail,
-                    "latency_ms": e.latency_ms,
-                },
-            }
-            for e in entries
-        ],
-    }
+def entries_to_openai(entries: list[ProbeEntry]) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": e.id,
+            "object": "model",
+            "created": 0,
+            "owned_by": "m365-copilot-gateway",
+            "root": e.tone,
+            "permission": [],
+            "metadata": {
+                "tone": e.tone,
+                "label": e.label,
+                "family": e.family,
+                "status": e.status,
+                "detail": e.detail,
+                "latency_ms": e.latency_ms,
+            },
+        }
+        for e in entries
+    ]
 
 
 def entry_dicts(entries: list[ProbeEntry]) -> list[dict[str, Any]]:

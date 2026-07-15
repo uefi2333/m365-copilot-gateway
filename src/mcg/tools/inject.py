@@ -22,11 +22,11 @@ def build_tool_preamble(
     if has_tool_results:
         lines.extend(
             [
-                "Prior tool results are in [tool_result ...] blocks in the conversation.",
+                "Tool results: prior tool results are in [tool_result ...] blocks in the conversation.",
                 "MULTI-HOP: if the user task is NOT finished, call the NEXT tool now.",
                 "Examples: use_skill loaded a skill → follow its steps with Write/Bash/Read.",
                 "Only answer in plain text when the whole task is done or no more tools apply.",
-                "Do not re-call the exact same tool with the same args.",
+                "Do NOT re-call the exact same tool with the same args.",
                 "",
             ]
         )

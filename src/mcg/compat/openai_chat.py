@@ -123,12 +123,15 @@ def final_openai_response(
     *,
     model: str,
     content: str,
+    reasoning_content: str | None = None,
     tool_calls: list[dict[str, Any]] | None = None,
     finish_reason: str = "stop",
     conversation_id: str | None = None,
     usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     msg: dict[str, Any] = {"role": "assistant", "content": content or None}
+    if reasoning_content:
+        msg["reasoning_content"] = reasoning_content
     if tool_calls:
         msg["tool_calls"] = tool_calls
         finish_reason = "tool_calls"
@@ -192,6 +195,8 @@ async def stream_openai_chunks(
     tool_calls_holder: list[dict[str, Any]] | None = None,
     conversation_id: str | None = None,
     usage: dict[str, int] | None = None,
+    reasoning_iter: AsyncIterator[str] | None = None,
+    reasoning_holder: list[str] | None = None,
 ) -> AsyncIterator[str]:
     """SSE chat.completion.chunk stream.
 
@@ -224,7 +229,21 @@ async def stream_openai_chunks(
     t0 = time.perf_counter()
     yield _make({"role": "assistant", "content": ""})
 
+    # Reasoning is an explicit OpenAI-compatible delta channel. It is never
+    # mixed into answer content or synthesized by the gateway.
+    if reasoning_iter is not None:
+        async for piece in reasoning_iter:
+            if piece:
+                yield _make({"reasoning_content": piece})
+
+    reasoning_seen = 0
+
     async for piece in text_iter:
+        if reasoning_holder is not None and len(reasoning_holder) > reasoning_seen:
+            chunk = "".join(reasoning_holder[reasoning_seen:])
+            reasoning_seen = len(reasoning_holder)
+            if chunk:
+                yield _make({"reasoning_content": chunk})
         if piece:
             content_len += len(piece)
             if ttft_ms == 0:
@@ -236,6 +255,9 @@ async def stream_openai_chunks(
                 )
             else:
                 yield _make({"content": piece})
+
+    if reasoning_holder is not None and len(reasoning_holder) > reasoning_seen:
+        yield _make({"reasoning_content": "".join(reasoning_holder[reasoning_seen:])})
 
     elapsed = time.perf_counter() - t0
     cps = round(content_len / elapsed, 1) if elapsed > 0 else 0.0
