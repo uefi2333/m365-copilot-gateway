@@ -69,3 +69,37 @@ async def ui_delete_account(request: Request, account_id: str = Form(...)):
         return RedirectResponse("/ui?err=auth", status_code=303)
     request.app.state.pool.delete(account_id)
     return RedirectResponse("/ui", status_code=303)
+
+
+@router.post("/ui/browser-login")
+async def ui_browser_login(request: Request, label: str = Form("")):
+    if not _authed(request):
+        return RedirectResponse("/ui?err=auth", status_code=303)
+    import uuid
+    fabric = request.app.state.fabric
+    pool = request.app.state.pool
+    account_id = f"pending-{uuid.uuid4().hex[:10]}"
+    try:
+        st = await fabric.capture_via_cdp(account_id, interactive=True)
+        if not st.valid:
+            return RedirectResponse("/ui?err=cdp", status_code=303)
+        token = fabric.get_hot(account_id)
+        if not token:
+            return RedirectResponse("/ui?err=cdp", status_code=303)
+        from mcg.token.jwtutil import decode_jwt_payload
+        claims = decode_jwt_payload(token)
+        real_id = str(claims.get("oid") or account_id)
+        acc = pool.import_token(token, label=label.strip() or f"user-{real_id[:8]}")
+        profile = fabric.profile_dir_for(real_id)
+        if account_id != real_id:
+            src = fabric.profile_dir_for(account_id)
+            if src.exists() and not profile.exists():
+                try:
+                    src.rename(profile)
+                except OSError:
+                    pass
+            fabric.put_hot(real_id, token)
+        pool.bind_profile(acc.id, str(profile))
+    except Exception:
+        return RedirectResponse("/ui?err=cdp", status_code=303)
+    return RedirectResponse("/ui?ok=cdp", status_code=303)

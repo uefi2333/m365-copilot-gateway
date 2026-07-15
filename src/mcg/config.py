@@ -28,6 +28,10 @@ class SubstrateConfig(BaseModel):
 class TokenConfig(BaseModel):
     refresh_skew_sec: int = 300
     prefer_cdp: bool = True
+    cdp_port: int = 9222
+    cdp_timeout_sec: float = 120.0
+    browser_binary: str | None = None
+    headless: bool = False
 
 
 class PoolConfig(BaseModel):

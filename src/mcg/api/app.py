@@ -22,7 +22,15 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     data_dir = Path(cfg.gateway.data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
-    fabric = TokenFabric(data_dir, refresh_skew_sec=cfg.token.refresh_skew_sec)
+    fabric = TokenFabric(
+        data_dir,
+        refresh_skew_sec=cfg.token.refresh_skew_sec,
+        prefer_cdp=cfg.token.prefer_cdp,
+        cdp_port=cfg.token.cdp_port,
+        cdp_timeout_sec=cfg.token.cdp_timeout_sec,
+        browser_binary=cfg.token.browser_binary,
+        headless=cfg.token.headless,
+    )
     pool = AccountPool(
         data_dir,
         fabric,

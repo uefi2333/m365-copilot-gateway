@@ -62,6 +62,21 @@ async def chat_completions(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    fabric = request.app.state.fabric
+    try:
+        # L0/L1 hot path; L2 CDP only if prefer_cdp and near expiry / missing
+        live = await fabric.ensure(
+            account.id,
+            fallback_token=account.token,
+            allow_cdp=cfg.token.prefer_cdp,
+            profile_path=account.profile_path or None,
+        )
+        if live != account.token:
+            pool.refresh_token(account.id, live)
+            account = pool.accounts[account.id]
+    except RuntimeError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
     canon = to_canonical(body)
     tone = resolve_tone(canon.model, models)
     prompt = tool_loop.augment_prompt(canon)

@@ -114,6 +114,23 @@ class AccountPool:
         self.save()
         return acc
 
+    def bind_profile(self, account_id: str, profile_path: str) -> Account:
+        acc = self.accounts[account_id]
+        acc.profile_path = profile_path
+        self.save()
+        return acc
+
+    def refresh_token(self, account_id: str, token: str) -> Account:
+        acc = self.accounts[account_id]
+        st = self.fabric.put_hot(account_id, token)
+        if not st.valid:
+            raise ValueError(st.error or "invalid token")
+        acc.token = token
+        acc.status = "active"
+        acc.errors = 0
+        self.save()
+        return acc
+
     def delete(self, account_id: str) -> bool:
         if account_id not in self.accounts:
             return False

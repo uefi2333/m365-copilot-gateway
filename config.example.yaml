@@ -24,6 +24,12 @@ token:
   refresh_skew_sec: 300
   # prefer CDP silent refresh when browser profile exists
   prefer_cdp: true
+  cdp_port: 9222
+  cdp_timeout_sec: 120
+  # optional absolute path; else auto-detect chrome/edge/chromium
+  browser_binary: null
+  # headless only works if already logged-in cookies exist in profile
+  headless: false
 
 pool:
   strategy: "round_robin"  # round_robin | sticky | least_load

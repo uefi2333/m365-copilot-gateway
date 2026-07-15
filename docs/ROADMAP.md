@@ -15,7 +15,7 @@
 
 ## Next
 
-- [ ] CDP silent token refresh (Playwright optional)
+- [x] CDP silent token refresh / semi-auto browser-login
 - [ ] Stream path emits tool_calls chunks cleanly
 - [ ] Anthropic `/v1/messages`
 - [ ] Sticky conversationId across turns

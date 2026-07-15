@@ -62,7 +62,14 @@
       <textarea name="token" rows="4" placeholder="paste access_token JWT (aud=substrate.office.com)" required></textarea>
       <div><button type="submit">Import token</button></div>
     </form>
-    <p class="muted">How to get token: open M365 Copilot in browser → DevTools → Network → WS filter substrate → copy access_token query param. CDP auto-capture comes next.</p>
+    <p class="muted">How to get token: open M365 Copilot in browser → DevTools → Network → WS filter substrate → copy access_token query param.</p>
+    <hr style="border:0;border-top:1px solid #243044;margin:1rem 0" />
+    <h3 style="margin:0 0 .5rem;font-size:.95rem">Semi-auto browser login (CDP)</h3>
+    <p class="muted">Opens a dedicated Chromium/Edge profile, navigates to M365 Chat, captures <code>access_token</code> from ChatHub WebSocket. Complete MFA in the window. Prefer CLI on servers without display: <code>mcg browser-login</code>.</p>
+    <form method="post" action="/ui/browser-login" class="row" style="margin-top:.5rem">
+      <input name="label" placeholder="label (optional)" style="max-width:220px" />
+      <button type="submit">Start browser capture</button>
+    </form>
   </section>
   {% endif %}
 

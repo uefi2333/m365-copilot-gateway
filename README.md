@@ -97,8 +97,8 @@ Tool execution: **client-executed by default** (gateway emits `tool_calls`; clie
 ## Account pool & import
 
 1. **Paste token** — JWT with `aud` starting `https://substrate.office.com/`
-2. **Browser semi-auto** — dedicated profile + CDP capture of ChatHub `access_token`
-3. **Cookie / session import** — advanced; may need re-calibration after UI changes
+2. **Browser semi-auto (CDP)** — `mcg browser-login` or WebUI button; dedicated profile + ChatHub `access_token` capture (see [docs/TOKEN_CDP.md](docs/TOKEN_CDP.md))
+3. **Refresh** — `mcg refresh-token <oid>` reuses profile cookies
 
 Pool policies: round-robin, sticky session key, cooldown on 429/Disengaged, per-account daily caps (optional).
 
