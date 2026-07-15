@@ -18,14 +18,9 @@ class ProbeEntry:
     latency_ms: int | None = None
 
 
-# Probe seed — keep lean; public /v1/models uses config advertise.
+# Keep aligned with DEFAULT_MODELS / config advertise.
 KNOWN_TONES: list[tuple[str, str, str, str]] = [
-    ("m365-copilot", "Magic", "M365 Copilot（自动）", "auto"),
-    ("gpt-5.5-reasoning", "Gpt_5_5_Reasoning", "GPT-5.5 深度推理", "gpt"),
-    ("gpt-5.5", "Gpt_5_5_Chat", "GPT-5.5 对话", "gpt"),
-    ("gpt-5.4-reasoning", "Gpt_5_4_Reasoning", "GPT-5.4 深度推理", "gpt"),
-    ("claude-sonnet-4.6", "Claude_Sonnet", "Claude Sonnet 4.6", "claude"),
-    ("claude-sonnet", "Claude_Sonnet", "Claude Sonnet", "claude"),
+    (m.id, m.tone, m.label, m.family) for m in DEFAULT_MODELS
 ]
 
 
@@ -50,12 +45,8 @@ async def live_probe(
     prompt: str = "Reply with exactly: PONG",
     max_tones: int = 3,
 ) -> list[ProbeEntry]:
-    """Best-effort live probe: send a tiny chat with selected tones.
-
-    ``client_factory(tone)`` must return an object with ``async chat(text, tone=...)``.
-    Limits to ``max_tones`` to avoid burning quota.
-    """
-    pick = tones or ["Magic", "Gpt_Quick", "Claude_Sonnet"]
+    """Best-effort live probe: send a tiny chat with selected tones."""
+    pick = tones or ["Magic", "Gpt_5_5_Reasoning", "Claude_Sonnet"]
     pick = pick[:max_tones]
     out: list[ProbeEntry] = []
     for tone in pick:
@@ -71,49 +62,52 @@ async def live_probe(
                     id=mid,
                     tone=tone,
                     label=f"live:{tone}",
-                    family="probed",
+                    family="probe",
                     status="probed_ok" if ok else "probed_fail",
-                    detail=(text or "")[:120],
+                    detail=(text or "")[:80],
                     latency_ms=ms,
                 )
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as e:  # noqa: BLE001
             ms = int((time.time() - t0) * 1000)
             out.append(
                 ProbeEntry(
                     id=mid,
                     tone=tone,
                     label=f"live:{tone}",
-                    family="probed",
+                    family="probe",
                     status="probed_fail",
-                    detail=str(exc)[:200],
+                    detail=f"{type(e).__name__}:{e}",
                     latency_ms=ms,
                 )
             )
     return out
 
 
-def entries_to_openai(entries: list[ProbeEntry]) -> list[dict[str, Any]]:
-    return [
-        {
-            "id": e.id,
-            "object": "model",
-            "created": 0,
-            "owned_by": "m365-copilot-gateway",
-            "root": e.tone,
-            "permission": [],
-            "metadata": {
-                "tone": e.tone,
-                "label": e.label,
-                "family": e.family,
-                "status": e.status,
-                "detail": e.detail,
-                "latency_ms": e.latency_ms,
-            },
-        }
-        for e in entries
-    ]
+def entries_to_openai(entries: list[ProbeEntry]) -> dict[str, Any]:
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": e.id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "m365-copilot-gateway",
+                "root": e.tone,
+                "permission": [],
+                "metadata": {
+                    "tone": e.tone,
+                    "label": e.label,
+                    "family": e.family,
+                    "status": e.status,
+                    "detail": e.detail,
+                    "latency_ms": e.latency_ms,
+                },
+            }
+            for e in entries
+        ],
+    }
 
 
-def entry_dict(e: ProbeEntry) -> dict[str, Any]:
-    return asdict(e)
+def entry_dicts(entries: list[ProbeEntry]) -> list[dict[str, Any]]:
+    return [asdict(e) for e in entries]

@@ -64,23 +64,23 @@ tools:
     - shell_route
 
 models:
-  # 公开模型列表（/v1/models 只暴露这里；不要塞一堆别名）
+  # 公开模型列表：只写官方产品名（/v1/models + WebUI 同源）
   advertise:
     - id: m365-copilot
       tone: Magic
-      label: "M365 Copilot（自动）"
-    - id: gpt-5.5-reasoning
+      label: "M365 Copilot"
+    - id: gpt-5.6
+      tone: Gpt_5_6_Reasoning
+      label: "GPT-5.6"
+    - id: gpt-5.5-think-deeper
       tone: Gpt_5_5_Reasoning
-      label: "GPT-5.5 深度推理"
-    - id: gpt-5.5
+      label: "GPT-5.5 Think deeper"
+    - id: gpt-5.5-quick
       tone: Gpt_5_5_Chat
-      label: "GPT-5.5 对话"
-    - id: gpt-5.4-reasoning
+      label: "GPT-5.5 Quick response"
+    - id: gpt-5.4-think-deeper
       tone: Gpt_5_4_Reasoning
-      label: "GPT-5.4 深度推理"
+      label: "GPT-5.4 Think deeper"
     - id: claude-sonnet-4.6
       tone: Claude_Sonnet
       label: "Claude Sonnet 4.6"
-    - id: claude-sonnet
-      tone: Claude_Sonnet
-      label: "Claude Sonnet"
