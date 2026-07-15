@@ -63,6 +63,70 @@ def is_session_reset_error(exc: BaseException) -> bool:
     return "disengaged" in msg or "conversation" in msg and "not found" in msg
 
 
+
+def extract_image_urls(obj: Any) -> list[str]:
+    """Pull Designer/DALL·E image URLs out of Substrate frames.
+
+    Image gen arrives as messageType=Progress, contentType=GraphicArt with
+    contentGenerationProgressList[].ImageReferenceUrls (status==2 when ready).
+    Plain text path previously skipped all Progress frames → empty reply.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def add(u: str) -> None:
+        u = (u or "").strip()
+        if not u or u in seen:
+            return
+        if not (u.startswith("http://") or u.startswith("https://") or u.startswith("data:image")):
+            return
+        seen.add(u)
+        out.append(u)
+
+    def walk(o: Any) -> None:
+        if isinstance(o, dict):
+            for key in ("ImageReferenceUrls", "imageReferenceUrls", "imageUrls", "ImageUrls"):
+                val = o.get(key)
+                if isinstance(val, list):
+                    for u in val:
+                        if isinstance(u, str):
+                            add(u)
+                elif isinstance(val, str):
+                    add(val)
+            # single fields
+            for key in ("imageUrl", "ImageUrl", "url", "sourceUrl", "contentUrl"):
+                val = o.get(key)
+                if isinstance(val, str) and ("designerapp" in val or "DallE" in val or val.startswith("data:image")):
+                    add(val)
+            for v in o.values():
+                walk(v)
+        elif isinstance(o, list):
+            for v in o:
+                walk(v)
+
+    walk(obj)
+    return out
+
+
+def format_image_markdown(urls: list[str], *, proxy_prefix: str | None = None) -> str:
+    """Render image URLs as markdown the OpenAI client can display.
+
+    Designer URLs often need auth; include raw URL plus optional gateway proxy.
+    Clients that cannot render remote auth URLs can hit /v1/images/proxy.
+    """
+    if not urls:
+        return ""
+    import urllib.parse
+    lines = ["[generated image]"]
+    for i, u in enumerate(urls, 1):
+        lines.append(f"![generated image {i}]({u})")
+        lines.append(u)
+        if proxy_prefix:
+            view = f"{proxy_prefix}?url={urllib.parse.quote(u, safe='')}"
+            lines.append(f"proxy: {view}")
+    return "\n".join(lines)
+
+
 def fold_stream_text(answer: str, next_text: str) -> tuple[str, str | None]:
     """Merge delta/snapshot text without duplicating prefixes.
 
@@ -165,6 +229,25 @@ class SubstrateClient:
 
     async def _read_stream(self, ws: ClientConnection) -> AsyncIterator[str]:
         answer = ""
+        image_urls: list[str] = []
+        images_emitted = False
+
+        def _collect_images(obj: Any) -> None:
+            for u in extract_image_urls(obj):
+                if u not in image_urls:
+                    image_urls.append(u)
+
+        def _maybe_emit_images() -> str | None:
+            nonlocal images_emitted
+            if images_emitted or not image_urls:
+                return None
+            # Prefer completed refs only; extract_image_urls already filters http(s)
+            md = format_image_markdown(image_urls, proxy_prefix="/v1/images/proxy")
+            if not md:
+                return None
+            images_emitted = True
+            return md
+
         while True:
             raw = await asyncio.wait_for(ws.recv(), timeout=self.timeout_sec)
             if isinstance(raw, bytes):
@@ -186,11 +269,16 @@ class SubstrateClient:
                     for arg in msg.get("arguments") or []:
                         if not isinstance(arg, dict):
                             continue
+                        _collect_images(arg)
                         delta = arg.get("writeAtCursor")
                         if isinstance(delta, str) and delta:
-                            answer, emit = fold_stream_text(answer, answer + delta)
-                            if emit:
-                                yield emit
+                            # skip pure "Loading image" progress noise
+                            if delta.strip().lower() in {"loading image", "loading image…", "loading image..."}:
+                                pass
+                            else:
+                                answer, emit = fold_stream_text(answer, answer + delta)
+                                if emit:
+                                    yield emit
                         messages = arg.get("messages")
                         if messages:
                             entries = messages if isinstance(messages, list) else [messages]
@@ -199,34 +287,71 @@ class SubstrateClient:
                                     continue
                                 if entry.get("author") == "user":
                                     continue
-                                # Control frames (Disengaged, Progress, …) must not become content
-                                if entry.get("messageType"):
-                                    if entry.get("messageType") == "Disengaged":
+                                _collect_images(entry)
+                                mt = entry.get("messageType")
+                                if mt:
+                                    if mt == "Disengaged":
                                         raise SubstrateError("disengaged")
+                                    # GraphicArt Progress carries the real image URLs
+                                    if (
+                                        mt == "Progress"
+                                        or entry.get("contentType") == "GraphicArt"
+                                        or entry.get("contentGenerationProgressList")
+                                    ):
+                                        # emit images as soon as ready (status 2 frames)
+                                        md = _maybe_emit_images()
+                                        if md and md not in answer:
+                                            answer, emit = fold_stream_text(answer, (answer + "\n" + md).strip())
+                                            if emit:
+                                                yield emit
                                     continue
                                 text = entry.get("text")
                                 if isinstance(text, str) and text:
+                                    if text.strip().lower() in {
+                                        "loading image",
+                                        "loading image…",
+                                        "loading image...",
+                                    }:
+                                        continue
                                     answer, emit = fold_stream_text(answer, text)
                                     if emit:
                                         yield emit
                                     break
                 if t == 2:
-                    # Completion payload — fold final text then end immediately.
+                    # Completion payload — fold final text + any late image URLs.
                     item = msg.get("item") or {}
+                    _collect_images(item)
                     item_msgs = item.get("messages") or []
                     for entry in reversed(item_msgs):
                         if not isinstance(entry, dict) or entry.get("author") == "user":
                             continue
+                        _collect_images(entry)
                         if entry.get("messageType"):
                             if entry.get("messageType") == "Disengaged":
                                 raise SubstrateError("disengaged")
                             continue
                         text = entry.get("text")
                         if isinstance(text, str) and text:
-                            answer, emit = fold_stream_text(answer, text)
-                            if emit:
-                                yield emit
+                            if text.strip().lower() not in {
+                                "loading image",
+                                "loading image…",
+                                "loading image...",
+                            }:
+                                answer, emit = fold_stream_text(answer, text)
+                                if emit:
+                                    yield emit
                         break
+                    # Always try to surface images at end if not yet emitted
+                    md = _maybe_emit_images()
+                    if md:
+                        # if answer empty or images not included
+                        if md not in answer:
+                            piece = (("\n" if answer else "") + md)
+                            answer = (answer + piece).strip()
+                            yield piece if piece.startswith("\n") else md
                     return
                 if t == 3:
+                    md = _maybe_emit_images()
+                    if md and md not in answer:
+                        yield (("\n" if answer else "") + md)
                     return

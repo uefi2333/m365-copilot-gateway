@@ -890,3 +890,72 @@ async def chat_completions(
         log.exception("chat 500: %s", exc)
         pool.mark_soft_error(account.id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/v1/images/proxy")
+async def proxy_generated_image(request: Request, url: str, _: None = Depends(require_api_key)):
+    """Proxy Designer/DALL·E ImageReferenceUrls that need an authenticated fetch.
+
+    Upstream `designerapp.officeapps.live.com/...&fileToken=` often returns 401
+    without browser session cookies. We try bearer substrate token + common
+    headers; on failure return 502 with a short body so clients still know.
+    """
+    import httpx
+    from urllib.parse import urlparse
+
+    if not url or not (url.startswith("https://") or url.startswith("http://")):
+        raise HTTPException(status_code=400, detail="url required")
+    host = (urlparse(url).hostname or "").lower()
+    allow = (
+        host.endswith("officeapps.live.com")
+        or host.endswith("sharepoint.com")
+        or host.endswith("office.com")
+        or host.endswith("microsoft.com")
+        or host.endswith("bing.com")
+        or host.endswith("blob.core.windows.net")
+    )
+    if not allow:
+        raise HTTPException(status_code=400, detail="host not allowed")
+
+    pool = request.app.state.pool
+    fabric = request.app.state.fabric
+    token = None
+    try:
+        acc = pool.acquire()
+        # fabric.ensure is async in this codebase
+        maybe = fabric.ensure(acc.id, acc.token)
+        if hasattr(maybe, "__await__"):
+            import asyncio
+            token = await maybe
+        else:
+            token = maybe or acc.token
+    except Exception:
+        token = None
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+        "Origin": "https://m365.cloud.microsoft",
+        "Referer": "https://m365.cloud.microsoft/",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            r = await client.get(url, headers=headers)
+            if r.status_code >= 400 and token:
+                # retry without auth (some fileToken URLs are cookie-less public-ish)
+                r = await client.get(url, headers={k: v for k, v in headers.items() if k != "Authorization"})
+            if r.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"upstream {r.status_code}")
+            ctype = r.headers.get("content-type") or "image/png"
+            return StreamingResponse(iter([r.content]), media_type=ctype)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=str(exc)[:200]) from exc
+
