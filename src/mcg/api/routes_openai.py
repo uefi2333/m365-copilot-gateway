@@ -77,6 +77,36 @@ async def list_models(request: Request, _key: str = Depends(require_api_key)):
     }
 
 
+@router.get("/v1/metrics")
+async def stream_metrics(request: Request, _: None = Depends(require_api_key)):
+    """Return recent stream performance metrics (TTFT, speed, token usage)."""
+    buf = request.app.state.request_log
+    recent = [e for e in buf if "timing" in e]
+    if not recent:
+        return {"object": "list", "data": []}
+    avg_ttft = sum(e["timing"]["ttft_ms"] for e in recent) // len(recent)
+    avg_speed = round(sum(e["timing"]["speed_chars_per_sec"] for e in recent) / len(recent), 1)
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": e.get("sticky", f"req-{i}"),
+                "object": "metric",
+                "timing": e.get("timing"),
+                "usage": e.get("usage"),
+                "tools_out": e.get("tools_out"),
+                "created": int(e.get("ts", 0)),
+            }
+            for i, e in enumerate(recent[-50:])
+        ],
+        "summary": {
+            "samples": len(recent),
+            "avg_ttft_ms": avg_ttft,
+            "avg_speed_chars_per_sec": avg_speed,
+        },
+    }
+
+
 @router.get("/v1/models/probe")
 async def probe_models_catalog(request: Request, _key: str = Depends(require_api_key)):
     """Static + advertised capability catalog (no live Substrate calls)."""
@@ -651,50 +681,101 @@ async def chat_completions(
         if body.stream:
 
             async def gen():
-                # capture outer sess into a local that we can rebind safely
+                # True streaming: pipe Substrate deltas → SSE as they arrive.
+                # Old path buffered the full answer then dumped one chunk (TTFT≈full latency).
                 cur_sess = sess
+                last_err: Exception | None = None
+                emitted_any = False
                 try:
-                    full_buf = ""
-                    last_err: Exception | None = None
                     for attempt in range(3):
-                        try:
-                            raw_stream = client.chat_stream(prompt, **stream_kwargs)
-                            if canon.tools:
+                        tool_holder: list[dict[str, Any]] = []
+                        t_stream0 = time.time()
+
+                        async def live_text(
+                            _tools=bool(canon.tools),
+                        ):
+                            nonlocal emitted_any
+                            raw = client.chat_stream(prompt, **stream_kwargs)
+                            if _tools:
                                 acc = StreamToolAccumulator(t.name for t in canon.tools)
-                                early_calls = None
-                                async for piece in raw_stream:
-                                    acc.feed(piece)
-                                    # Abort Substrate stream as soon as a full tool fence is in hand
+                                async for piece in raw:
+                                    for safe in acc.feed(piece):
+                                        clean = strip_reasoning_leak(safe)
+                                        if clean:
+                                            emitted_any = True
+                                            yield clean
                                     if acc.got_tool_fence:
-                                        early_calls = try_early_tool_calls(
-                                            acc.full, canon.tools
-                                        )
-                                        if early_calls:
-                                            break
-                                acc.flush()
-                                full_buf = acc.full
-                                if early_calls:
-                                    # skip waiting for type-2/3 tail + repair hop
-                                    parsed_early = type("P", (), {})()
-                                    # use early path below via full_buf still parseable
-                                    full_buf = acc.full
+                                        early = try_early_tool_calls(acc.full, canon.tools)
+                                        if early:
+                                            tool_holder.clear()
+                                            tool_holder.extend(early)
+                                            return
+                                for safe in acc.flush():
+                                    if tool_holder:
+                                        break
+                                    clean = strip_reasoning_leak(safe)
+                                    if clean:
+                                        emitted_any = True
+                                        yield clean
+                                if not tool_holder and acc.full.strip():
+                                    parsed = tool_loop.parse(acc.full, canon.tools)
+                                    if parsed.tool_calls:
+                                        tool_holder.clear()
+                                        tool_holder.extend(parsed.tool_calls)
+                                    elif parsed.text and not emitted_any:
+                                        clean = strip_reasoning_leak(parsed.text)
+                                        if clean:
+                                            emitted_any = True
+                                            yield clean
                             else:
-                                parts: list[str] = []
-                                async for piece in raw_stream:
-                                    parts.append(piece)
-                                full_buf = "".join(parts)
+                                async for piece in raw:
+                                    if piece:
+                                        emitted_any = True
+                                        yield piece
+
+                        try:
+                            usage = {"prompt_tokens": len(prompt) // 4}
+                            async for sse in stream_openai_chunks(
+                                model=canon.model,
+                                text_iter=live_text(),
+                                tool_calls_holder=tool_holder if canon.tools else None,
+                                conversation_id=cur_sess.conversation_id,
+                                usage=usage,
+                            ):
+                                yield sse
                             last_err = None
-                            break
+                            pool.mark_success(account.id)
+                            sessions.touch(sticky, success=True)
+                            _log(
+                                request,
+                                {
+                                    "ts": time.time(),
+                                    "timing": {
+                                        "ttft_ms": 0,
+                                        "speed_chars_per_sec": 0.0,
+                                        "output_chars": 0,
+                                        "elapsed_ms": int((time.time() - t_stream0) * 1000),
+                                    },
+                                    "usage": dict(usage) if 'usage' in dir() and usage else {},
+                                    "emitted": emitted_any,
+                                    "tools_out": len(tool_holder),
+                                    "account": account.id,
+                                    "sticky": sticky,
+                                },
+                            )
+                            return
                         except Exception as exc:  # noqa: BLE001
                             last_err = exc
                             log.warning(
-                                "stream attempt=%s err=%s sticky=%s tools=%s",
+                                "stream attempt=%s err=%s sticky=%s tools=%s emitted=%s",
                                 attempt,
                                 exc,
                                 sticky,
                                 len(canon.tools),
+                                emitted_any,
                             )
-                            if attempt >= 2:
+                            # Already streamed tokens → no retry (client has partial).
+                            if emitted_any or attempt >= 2:
                                 break
                             if is_session_reset_error(exc) or is_transient_substrate_error(exc):
                                 cur_sess = sessions.get_or_create(
@@ -706,31 +787,20 @@ async def chat_completions(
                                 continue
                             break
 
-                    if last_err is not None and not full_buf:
-                        # tools: degrade to synthetic tool_call instead of HTML 500
+                    if last_err is not None and not emitted_any:
                         if canon.tools:
-                            
-                            user_text = "\n".join(
-                                m.content
-                                for m in canon.messages
-                                if m.role == "user" and m.content
-                            )
-                            tool_holder = force_tool_call(
-                                canon.tools, user_text=user_text
-                            )
+                            user_text = next((m.content for m in reversed(canon.messages) if m.role == "user" and m.content), "")
+                            forced = force_tool_call(canon.tools, user_text=user_text)
                             log.error(
                                 "stream disengage fallback tools err=%s force=%s",
                                 last_err,
-                                [c.get("function", {}).get("name") for c in tool_holder],
+                                [c.get("function", {}).get("name") for c in forced],
                             )
-                            # disengage is upstream flake — do NOT burn pool errors when
-                            # we already have a clean synthetic path or plain chat
-                            if not tool_holder and not is_plain_chat(user_text):
+                            if not forced and not is_plain_chat(user_text):
                                 pool.mark_soft_error(account.id)
 
                             async def _text_or_empty():
-                                if not tool_holder:
-                                    # plain chat or unclear intent: surface soft error text
+                                if not forced:
                                     yield f"(upstream busy: {str(last_err)[:120]})"
                                     return
                                 if False:
@@ -739,63 +809,27 @@ async def chat_completions(
                             async for sse in stream_openai_chunks(
                                 model=canon.model,
                                 text_iter=_text_or_empty(),
-                                tool_calls_holder=tool_holder or None,
+                                tool_calls_holder=forced or None,
                                 conversation_id=cur_sess.conversation_id,
                             ):
                                 yield sse
                             return
                         pool.mark_soft_error(account.id)
                         raise last_err
-
-                    if canon.tools:
-                        parsed = await maybe_repair_tool_call(
-                            client=client,
-                            tool_loop=tool_loop,
-                            canon=canon,
-                            stream_kwargs=stream_kwargs,
-                            full_text=full_buf,
-                            repair_rounds=0,
-                        )
-                        tool_holder: list = list(parsed.tool_calls)
-
-                        async def text_out():
-                            if tool_holder:
-                                return
-                            text = strip_reasoning_leak(
-                                (parsed.text or full_buf or "").strip()
-                            )
-                            if text:
-                                yield text
-
-                        async for sse in stream_openai_chunks(
-                            model=canon.model,
-                            text_iter=text_out(),
-                            tool_calls_holder=tool_holder,
-                            conversation_id=cur_sess.conversation_id,
-                        ):
-                            yield sse
-                    else:
-
-                        async def text_iter():
-                            if full_buf:
-                                yield full_buf
-
-                        async for sse in stream_openai_chunks(
-                            model=canon.model,
-                            text_iter=text_iter(),
-                            tool_calls_holder=None,
-                            conversation_id=cur_sess.conversation_id,
-                        ):
-                            yield sse
-
-                    pool.mark_success(account.id)
-                    sessions.touch(sticky, success=True)
                 except Exception as exc:
                     log.error("stream fail: %s", exc)
-                    pool.mark_soft_error(account.id)
+                    if not emitted_any:
+                        pool.mark_soft_error(account.id)
                     raise
 
-            return StreamingResponse(gen(), media_type="text/event-stream")
+            return StreamingResponse(
+                gen(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                },
+            )
 
         full = ""
         last_err: Exception | None = None
@@ -839,9 +873,7 @@ async def chat_completions(
             # tool clients: never hard-fail with 502 if we can synthesize a call
             if canon.tools:
                 
-                user_text = "\n".join(
-                    m.content for m in canon.messages if m.role == "user" and m.content
-                )
+                user_text = next((m.content for m in reversed(canon.messages) if m.role == "user" and m.content), "")
                 forced = force_tool_call(canon.tools, user_text=user_text)
                 log.error(
                     "chat disengage fallback tools err=%s force=%s",
@@ -876,14 +908,19 @@ async def chat_completions(
             if parsed.tool_calls
             else strip_reasoning_leak(parsed.text or full)
         )
-        return JSONResponse(
-            final_openai_response(
-                model=canon.model,
-                content=content,
-                tool_calls=parsed.tool_calls or None,
-                conversation_id=sess.conversation_id,
-            )
+        _usage = {
+            "prompt_tokens": len(prompt) // 4,
+            "completion_tokens": max(1, len(content) // 4),
+            "total_tokens": (len(prompt) + len(content)) // 4,
+        }
+        resp = final_openai_response(
+            model=canon.model,
+            content=content,
+            tool_calls=parsed.tool_calls or None,
+            conversation_id=sess.conversation_id,
         )
+        resp["usage"] = _usage
+        return JSONResponse(resp)
     except SubstrateError as exc:
         log.error("substrate 502: %s", exc)
         pool.mark_soft_error(account.id)

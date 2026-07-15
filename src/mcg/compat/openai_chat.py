@@ -165,12 +165,23 @@ async def stream_openai_chunks(
     text_iter: AsyncIterator[str],
     tool_calls_holder: list[dict[str, Any]] | None = None,
     conversation_id: str | None = None,
+    usage: dict[str, int] | None = None,
 ) -> AsyncIterator[str]:
-    """SSE chat.completion.chunk stream."""
+    """SSE chat.completion.chunk stream.
+
+    Emits usage + timing (ttft_ms, speed_chars_per_sec) in the final data chunk.
+    First content chunk carries ``timing.ttft_ms`` as an extension field.
+    """
     cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
+    content_len = 0
+    ttft_ms = 0
 
-    def pack(delta: dict[str, Any], finish: str | None = None) -> str:
+    def _make(
+        delta: dict[str, Any],
+        finish: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> str:
         body: dict[str, Any] = {
             "id": cid,
             "object": "chat.completion.chunk",
@@ -180,18 +191,54 @@ async def stream_openai_chunks(
         }
         if conversation_id:
             body["conversation_id"] = conversation_id
+        if extra:
+            body.update(extra)
         return "data: " + json.dumps(body, ensure_ascii=False) + "\n\n"
 
-    yield pack({"role": "assistant", "content": ""})
+    t0 = time.perf_counter()
+    yield _make({"role": "assistant", "content": ""})
+
     async for piece in text_iter:
         if piece:
-            yield pack({"content": piece})
+            content_len += len(piece)
+            if ttft_ms == 0:
+                ttft_ms = int((time.perf_counter() - t0) * 1000)
+                # first content chunk: include ttft in custom timing extension
+                yield _make(
+                    {"content": piece},
+                    extra={"timing": {"ttft_ms": ttft_ms}},
+                )
+            else:
+                yield _make({"content": piece})
+
+    elapsed = time.perf_counter() - t0
+    cps = round(content_len / elapsed, 1) if elapsed > 0 else 0.0
+
+    timing_meta = {
+        "ttft_ms": ttft_ms,
+        "speed_chars_per_sec": cps,
+        "output_chars": content_len,
+        "elapsed_ms": int(elapsed * 1000),
+    }
+
+    usage_out = {}
+    if usage is not None:
+        est = max(1, content_len // 4)
+        usage["completion_tokens"] = est
+        usage["total_tokens"] = usage.get("prompt_tokens", 0) + est
+        usage_out = dict(usage)
+
+    finish_extra: dict[str, Any] = {}
+    if usage_out:
+        finish_extra["usage"] = usage_out
+    if timing_meta:
+        finish_extra["timing"] = timing_meta
 
     tools = list(tool_calls_holder or [])
     if tools:
         for frag in _openai_tool_call_deltas(tools):
-            yield pack({"tool_calls": [frag]})
-        yield pack({}, finish="tool_calls")
+            yield _make({"tool_calls": [frag]})
+        yield _make({}, finish="tool_calls", extra=finish_extra if finish_extra else None)
     else:
-        yield pack({}, finish="stop")
+        yield _make({}, finish="stop", extra=finish_extra if finish_extra else None)
     yield "data: [DONE]\n\n"

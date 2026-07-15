@@ -42,11 +42,10 @@ def _required_keys(tool: CanonicalTool) -> list[str]:
 
 
 def _user_blob(canon: CanonicalRequest) -> str:
-    parts: list[str] = []
-    for m in canon.messages:
+    for m in reversed(canon.messages):
         if m.role == "user" and m.content:
-            parts.append(m.content)
-    return "\n".join(parts)
+            return m.content
+    return ""
 
 
 def _extract_query(user_text: str, tool_name: str = "") -> str:
