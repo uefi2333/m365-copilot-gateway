@@ -304,7 +304,7 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     if args.cmd == "accounts":
-        for a in pool.list_accounts():
+        for a in pool.list_public():
             st = fabric.status_dict(a.id)
             print(
                 f"{a.id}\t{a.label}\tenabled={a.enabled}\t"
