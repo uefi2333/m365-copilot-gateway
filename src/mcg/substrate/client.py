@@ -179,6 +179,7 @@ class SubstrateClient:
         message_history: list[dict[str, Any]] | None = None,
         message_extras: dict[str, Any] | None = None,
         agent_id: str | None = None,
+        custom_instructions: str | None = None,
     ) -> AsyncIterator[str]:
         conv = conversation_id or str(uuid.uuid4())
         sess = session_id or str(uuid.uuid4())
@@ -211,6 +212,7 @@ class SubstrateClient:
                     message_history=message_history,
                     message_extras=message_extras,
                     agent_id=agent_id,
+                    custom_instructions=custom_instructions,
                 )
                 # cramt §4: Metrics must share the same WS send as chat
                 await ws.send(invoke + metrics_frame())

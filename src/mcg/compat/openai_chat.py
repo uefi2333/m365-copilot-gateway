@@ -102,6 +102,23 @@ def to_canonical(req: OpenAIChatRequest) -> CanonicalRequest:
     )
 
 
+def estimate_tokens(text: str) -> int:
+    """Rough OpenAI-compatible token estimate.
+
+    Substrate never returns real token counts. Word-aware heuristic is better
+    than pure char//4 for CJK/mixed text and keeps usage non-zero for auditors.
+    """
+    if not text:
+        return 0
+    words = [w for w in text.replace(chr(10), " ").split(" ") if w]
+    if not words:
+        return max(1, len(text) // 2)
+    cjk = sum(1 for ch in text if "一" <= ch <= "鿿")
+    latin_words = max(1, len(words) - cjk // 2)
+    est = int(latin_words * 1.3 + cjk)
+    return max(1, est)
+
+
 def final_openai_response(
     *,
     model: str,
@@ -109,11 +126,20 @@ def final_openai_response(
     tool_calls: list[dict[str, Any]] | None = None,
     finish_reason: str = "stop",
     conversation_id: str | None = None,
+    usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     msg: dict[str, Any] = {"role": "assistant", "content": content or None}
     if tool_calls:
         msg["tool_calls"] = tool_calls
         finish_reason = "tool_calls"
+    if usage is None:
+        pt = 0
+        ct = estimate_tokens(content or "")
+        usage = {
+            "prompt_tokens": pt,
+            "completion_tokens": ct,
+            "total_tokens": pt + ct,
+        }
     out: dict[str, Any] = {
         "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
         "object": "chat.completion",
@@ -126,7 +152,7 @@ def final_openai_response(
                 "finish_reason": finish_reason,
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage,
     }
     if conversation_id:
         out["conversation_id"] = conversation_id
@@ -223,7 +249,9 @@ async def stream_openai_chunks(
 
     usage_out = {}
     if usage is not None:
-        est = max(1, content_len // 4)
+        # content_len is characters; estimate_tokens needs the text itself,
+        # so approximate from char count with the same CJK-aware bias.
+        est = max(1, content_len // 3)  # slightly denser than //4
         usage["completion_tokens"] = est
         usage["total_tokens"] = usage.get("prompt_tokens", 0) + est
         usage_out = dict(usage)

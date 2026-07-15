@@ -162,6 +162,7 @@ def build_chat_invoke(
     message_history: list[dict[str, Any]] | None = None,
     message_extras: dict[str, Any] | None = None,
     agent_id: str | None = None,
+    custom_instructions: str | None = None,
 ) -> str:
     message: dict[str, Any] = {
         "author": "user",
@@ -179,6 +180,19 @@ def build_chat_invoke(
     if message_extras:
         # Best-effort multimodal keys (imageBase64 / imageUrl / …)
         message.update(message_extras)
+    options: dict[str, Any] = {}
+    extra_ext: dict[str, Any] = {}
+    # Surface OpenAI/Anthropic system prompts via Copilot custom-instructions
+    # path (optionsSets already includes add_custom_instructions).
+    if custom_instructions:
+        ci = custom_instructions.strip()
+        if ci:
+            options["customInstructions"] = ci
+            extra_ext["customInstructions"] = ci
+            message["clientPreferences"] = {
+                **(message.get("clientPreferences") or {}),
+                "customInstructions": ci,
+            }
     payload: dict[str, Any] = {
         "arguments": [
             {
@@ -188,8 +202,8 @@ def build_chat_invoke(
                 "optionsSets": options_sets or DEFAULT_OPTIONS_SETS,
                 "streamingMode": "ConciseWithPadding",
                 "spokenTextMode": "None",
-                "options": {},
-                "extraExtensionParameters": {},
+                "options": options,
+                "extraExtensionParameters": extra_ext,
                 "allowedMessageTypes": ALLOWED_MESSAGE_TYPES,
                 "sliceIds": [],
                 "threadLevelGptId": {},

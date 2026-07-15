@@ -243,6 +243,7 @@ async def anthropic_messages(
 
     tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
     prompt = tool_loop.augment_prompt(canon) if canon.tools else canon.prompt_text()
+    custom_instructions = canon.system_text() or None
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
 
@@ -266,6 +267,7 @@ async def anthropic_messages(
             session_id=sess.session_id,
             is_start_of_session=is_start,
             message_extras=msg_extras,
+            custom_instructions=custom_instructions,
         )
 
         full = await client.chat(prompt, **stream_kwargs)
@@ -332,12 +334,16 @@ async def anthropic_messages(
 
             return StreamingResponse(gen(), media_type="text/event-stream")
 
+        from mcg.compat.openai_chat import estimate_tokens
+
         return JSONResponse(
             final_anthropic_response(
                 model=canon.model,
                 content=content or "",
                 tool_calls=tools,
                 conversation_id=sess.conversation_id,
+                input_tokens=estimate_tokens(prompt),
+                output_tokens=estimate_tokens(content or ""),
             )
         )
     except SubstrateError as exc:

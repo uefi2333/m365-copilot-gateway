@@ -15,6 +15,7 @@ from mcg.auth.deps import require_api_key
 from mcg.compat.canonical import CanonicalMessage
 from mcg.compat.openai_chat import (
     OpenAIChatRequest,
+    estimate_tokens,
     final_openai_response,
     stream_openai_chunks,
     to_canonical,
@@ -573,6 +574,9 @@ async def chat_completions(
     else:
         prompt = canon.prompt_text()
 
+    # Surface system prompt via Substrate customInstructions channel.
+    custom_instructions = canon.system_text() or None
+
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
 
@@ -600,6 +604,7 @@ async def chat_completions(
             "is_start": is_start,
             "multimodal": len(mm_parts),
             "tool_exec": cfg.tools.execution,
+            "has_system": bool(custom_instructions),
         },
     )
 
@@ -646,6 +651,7 @@ async def chat_completions(
             is_start_of_session=is_start,
             message_extras=msg_extras,
             agent_id=agent_id,
+            custom_instructions=custom_instructions,
         )
 
         # local tool loop only for non-stream + shell-capable tools
@@ -734,7 +740,7 @@ async def chat_completions(
                                         yield piece
 
                         try:
-                            usage = {"prompt_tokens": len(prompt) // 4}
+                            usage = {"prompt_tokens": estimate_tokens(prompt)}
                             async for sse in stream_openai_chunks(
                                 model=canon.model,
                                 text_iter=live_text(),
@@ -909,17 +915,18 @@ async def chat_completions(
             else strip_reasoning_leak(parsed.text or full)
         )
         _usage = {
-            "prompt_tokens": len(prompt) // 4,
-            "completion_tokens": max(1, len(content) // 4),
-            "total_tokens": (len(prompt) + len(content)) // 4,
+            "prompt_tokens": estimate_tokens(prompt),
+            "completion_tokens": estimate_tokens(content or ""),
+            "total_tokens": 0,
         }
+        _usage["total_tokens"] = _usage["prompt_tokens"] + _usage["completion_tokens"]
         resp = final_openai_response(
             model=canon.model,
             content=content,
             tool_calls=parsed.tool_calls or None,
             conversation_id=sess.conversation_id,
+            usage=_usage,
         )
-        resp["usage"] = _usage
         return JSONResponse(resp)
     except SubstrateError as exc:
         log.error("substrate 502: %s", exc)

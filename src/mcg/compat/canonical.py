@@ -30,25 +30,59 @@ class CanonicalRequest(BaseModel):
     user: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
+    def system_text(self) -> str:
+        """Join all system messages (if any)."""
+        parts = [m.content.strip() for m in self.messages if m.role == "system" and m.content]
+        return "\n\n".join(parts)
+
     def prompt_text(self) -> str:
         """Flatten messages into a single user-facing prompt for Substrate.
 
         OpenAI multi-turn tool loop shape is preserved as labeled blocks so the
         model can see prior tool_calls + tool results on the next hop.
+
+        Substrate has no real system channel. A single [system] block at the
+        head is frequently ignored by the host metaprompt, so we:
+          1. Wrap system text as a high-priority directive at the top
+          2. Re-assert it immediately before the final user turn
         """
-        parts: list[str] = []
+        systems: list[str] = []
+        turns: list[str] = []
         for m in self.messages:
             if m.role == "system" and m.content:
-                parts.append(f"[system]\n{m.content}")
+                systems.append(m.content.strip())
             elif m.role == "user" and m.content:
-                parts.append(m.content)
+                turns.append(m.content)
             elif m.role == "assistant":
                 block = self._format_assistant(m)
                 if block:
-                    parts.append(block)
+                    turns.append(block)
             elif m.role == "tool":
-                parts.append(self._format_tool_result(m))
-        return "\n\n".join(parts) if parts else ""
+                turns.append(self._format_tool_result(m))
+
+        if not systems and not turns:
+            return ""
+
+        parts: list[str] = []
+        if systems:
+            joined = "\n\n".join(systems)
+            # Soft, non-adversarial framing — hard "override" language triggers
+            # Substrate Disengaged. Match Copilot Custom Instructions tone.
+            parts.append(
+                "Custom instructions for this conversation (apply to every reply):\n"
+                f"{joined}"
+            )
+        if turns:
+            if systems and len(turns) >= 1:
+                head, last = turns[:-1], turns[-1]
+                parts.extend(head)
+                # Re-assert near generation without jailbreak-y wording.
+                parts.append(
+                    f"[Apply custom instructions]\n{last}"
+                )
+            else:
+                parts.extend(turns)
+        return "\n\n".join(parts)
 
     @staticmethod
     def _format_assistant(m: CanonicalMessage) -> str:

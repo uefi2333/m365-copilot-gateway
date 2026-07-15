@@ -204,7 +204,11 @@ def final_anthropic_response(
     content: str,
     tool_calls: list[dict[str, Any]] | None = None,
     conversation_id: str | None = None,
+    input_tokens: int = 0,
+    output_tokens: int | None = None,
 ) -> dict[str, Any]:
+    from mcg.compat.openai_chat import estimate_tokens
+
     blocks: list[dict[str, Any]] = []
     if content:
         blocks.append({"type": "text", "text": content})
@@ -229,6 +233,8 @@ def final_anthropic_response(
                     "input": inp,
                 }
             )
+    if output_tokens is None:
+        output_tokens = estimate_tokens(content or "")
     out: dict[str, Any] = {
         "id": f"msg_{uuid.uuid4().hex[:24]}",
         "type": "message",
@@ -237,7 +243,10 @@ def final_anthropic_response(
         "content": blocks or [{"type": "text", "text": ""}],
         "stop_reason": stop,
         "stop_sequence": None,
-        "usage": {"input_tokens": 0, "output_tokens": 0},
+        "usage": {
+            "input_tokens": max(0, int(input_tokens)),
+            "output_tokens": max(1, int(output_tokens or 1)),
+        },
     }
     if conversation_id:
         out["conversation_id"] = conversation_id
