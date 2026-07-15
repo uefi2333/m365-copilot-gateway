@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from mcg.auth.deps import require_api_key
+from mcg.compat.canonical import CanonicalMessage
 from mcg.compat.openai_chat import (
     OpenAIChatRequest,
     final_openai_response,
@@ -14,6 +15,8 @@ from mcg.compat.openai_chat import (
     to_canonical,
 )
 from mcg.models_catalog import resolve_tone
+from mcg.models_probe import catalog_snapshot, entries_to_openai, live_probe
+from mcg.multimodal.adapter import substrate_message_extras
 from mcg.substrate.client import SubstrateClient, SubstrateError
 
 router = APIRouter()
@@ -54,6 +57,106 @@ async def list_models(request: Request, _key: str = Depends(require_api_key)):
     }
 
 
+@router.get("/v1/models/probe")
+async def probe_models_catalog(request: Request, _key: str = Depends(require_api_key)):
+    """Static + advertised capability catalog (no live Substrate calls)."""
+    extra = request.app.state.models
+    entries = catalog_snapshot(extra)
+    return {
+        "object": "list",
+        "mode": "catalog",
+        "data": entries_to_openai(entries),
+    }
+
+
+@router.post("/v1/models/probe")
+async def probe_models_live(
+    request: Request,
+    _key: str = Depends(require_api_key),
+    max_tones: int = 2,
+):
+    """Live tone probe — burns a tiny chat per tone. Default 2 tones."""
+    cfg = request.app.state.config
+    pool = request.app.state.pool
+    try:
+        account = pool.acquire()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    fabric = request.app.state.fabric
+    try:
+        live = await fabric.ensure(
+            account.id,
+            fallback_token=account.token,
+            allow_cdp=cfg.token.prefer_cdp,
+            profile_path=account.profile_path or None,
+        )
+        if live != account.token:
+            pool.refresh_token(account.id, live)
+            account = pool.accounts[account.id]
+    except RuntimeError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    def factory(_tone: str):
+        return SubstrateClient(
+            account.token,
+            origin=cfg.substrate.origin,
+            time_zone=cfg.substrate.time_zone,
+            timeout_sec=min(60, cfg.substrate.request_timeout_sec),
+        )
+
+    try:
+        entries = await live_probe(client_factory=factory, max_tones=max(1, min(max_tones, 5)))
+        pool.mark_success(account.id)
+        return {"object": "list", "mode": "live", "data": entries_to_openai(entries)}
+    except Exception as exc:  # noqa: BLE001
+        pool.mark_error(account.id, cooldown=True)
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+async def _local_tool_rounds(
+    *,
+    client: SubstrateClient,
+    tool_loop,
+    local_runner,
+    canon,
+    stream_kwargs: dict[str, Any],
+    max_rounds: int,
+    tone: str,
+) -> tuple[str, list]:
+    """Run model → local tools → model until stop or max_rounds."""
+    full = await client.chat(tool_loop.augment_prompt(canon), **stream_kwargs)
+    parsed = tool_loop.parse(full, canon.tools)
+    rounds = 0
+    while parsed.tool_calls and rounds < max_rounds:
+        rounds += 1
+        results = await local_runner.run_all(parsed.tool_calls)
+        tool_msgs = local_runner.as_tool_messages(results)
+        canon.messages.append(
+            CanonicalMessage(
+                role="assistant",
+                content=parsed.text,
+                tool_calls=parsed.tool_calls,
+            )
+        )
+        for tm in tool_msgs:
+            canon.messages.append(
+                CanonicalMessage(
+                    role="tool",
+                    content=tm["content"],
+                    name=tm.get("name"),
+                    tool_call_id=tm.get("tool_call_id"),
+                )
+            )
+        next_kwargs = dict(stream_kwargs)
+        next_kwargs["is_start_of_session"] = False
+        next_kwargs["message_extras"] = None
+        full = await client.chat(tool_loop.augment_prompt(canon), **next_kwargs)
+        parsed = tool_loop.parse(full, canon.tools)
+    content = parsed.text if parsed.tool_calls else full
+    return content, parsed.tool_calls
+
+
 @router.post("/v1/chat/completions")
 async def chat_completions(
     body: OpenAIChatRequest,
@@ -65,6 +168,7 @@ async def chat_completions(
     tool_loop = request.app.state.tool_loop
     models = request.app.state.models
     sessions = request.app.state.sessions
+    local_runner = getattr(request.app.state, "local_runner", None)
 
     try:
         account = pool.acquire(sticky_key=body.user)
@@ -88,6 +192,8 @@ async def chat_completions(
     canon = to_canonical(body)
     tone = resolve_tone(canon.model, models)
     prompt = tool_loop.augment_prompt(canon)
+    mm_parts = canon.extra.get("multimodal_parts") or []
+    msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
 
     sticky = _sticky_key(body, account.id)
     force_new = bool(body.reset_conversation or canon.extra.get("reset_conversation"))
@@ -111,6 +217,8 @@ async def chat_completions(
             "sticky": sticky,
             "conversation_id": sess.conversation_id,
             "is_start": is_start,
+            "multimodal": len(mm_parts),
+            "tool_exec": cfg.tools.execution,
         },
     )
 
@@ -127,26 +235,50 @@ async def chat_completions(
             conversation_id=sess.conversation_id,
             session_id=sess.session_id,
             is_start_of_session=is_start,
+            message_extras=msg_extras,
         )
+
+        use_local = (
+            cfg.tools.execution == "local"
+            and local_runner is not None
+            and local_runner.enabled
+            and bool(canon.tools)
+            and not body.stream
+        )
+
+        if use_local:
+            content, tool_calls = await _local_tool_rounds(
+                client=client,
+                tool_loop=tool_loop,
+                local_runner=local_runner,
+                canon=canon,
+                stream_kwargs=stream_kwargs,
+                max_rounds=cfg.tools.max_rounds,
+                tone=tone,
+            )
+            pool.mark_success(account.id)
+            sessions.touch(sticky, success=True)
+            return JSONResponse(
+                final_openai_response(
+                    model=canon.model,
+                    content=content,
+                    tool_calls=tool_calls or None,
+                    conversation_id=sess.conversation_id,
+                )
+            )
 
         if body.stream:
 
             async def gen():
                 try:
                     if canon.tools:
-                        # Buffer full reply so we can strip fences and emit clean
-                        # content + OpenAI tool_call deltas (no dual fence+tools).
                         chunks: list[str] = []
                         async for piece in client.chat_stream(prompt, **stream_kwargs):
                             chunks.append(piece)
                         full = "".join(chunks)
                         parsed = tool_loop.parse(full, canon.tools)
                         tool_holder = list(parsed.tool_calls)
-                        content_out = (
-                            parsed.text
-                            if parsed.tool_calls
-                            else full
-                        )
+                        content_out = parsed.text if parsed.tool_calls else full
 
                         async def text_iter():
                             if content_out:
@@ -160,7 +292,6 @@ async def chat_completions(
                         ):
                             yield sse
                     else:
-                        # Live token stream when no tools to parse
                         async def text_iter():
                             async for piece in client.chat_stream(prompt, **stream_kwargs):
                                 yield piece

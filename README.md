@@ -116,15 +116,42 @@ See [docs/TOKEN_CDP.md](docs/TOKEN_CDP.md).
 - Tokens stored under `data_dir` with restricted permissions
 - Do not expose publicly without TLS + strong keys + network policy
 
+## API surface
+
+| Endpoint | Notes |
+|----------|--------|
+| `POST /v1/chat/completions` | OpenAI chat (+ tools, multimodal content parts) |
+| `POST /v1/messages` | Anthropic Messages API shape |
+| `GET /v1/models` | Advertised model / tone list |
+| `GET /v1/models/probe` | Catalog snapshot (no live calls) |
+| `POST /v1/models/probe?max_tones=2` | Live tone probe (uses quota) |
+| `GET /health` | Health + feature flags |
+| `GET /admin/auth/status` | Token / refresh / keepalive |
+
+### Tools execution
+
+```yaml
+tools:
+  execution: client   # default-safe: return tool_calls to client
+  # execution: local  # gateway runs shell-like tools (bash/shell/…)
+  max_rounds: 8
+```
+
+### Multimodal
+
+OpenAI `image_url` / `input_audio` parts are parsed, hashed, injected into the
+Substrate text prompt, and best-effort attached as `imageBase64` / `imageUrl`
+on the chat message (tenant may ignore unknown fields).
+
 ## Development status
 
 | Phase | Scope | State |
 |-------|--------|--------|
-| P0 | Substrate chat stream + OpenAI completions + auth + health | scaffold / in progress |
-| P1 | Account pool + token fabric + WebUI shell | scaffold |
-| P2 | Dynamic tools multi-agent loop | planned |
-| P3 | Auto model list + tone matrix | planned |
-| P4 | Multimodal (image/audio adapters) | planned |
+| P0 | Chat + OpenAI + Anthropic + tools + multimodal + probe + auth keepalive | **done** |
+| P1 | Account pool + token fabric + WebUI shell | done (basic) |
+| P2 | Dynamic tools multi-agent loop (client + local) | done |
+| P3 | Model list + live probe | done |
+| P4 | Multimodal adapters | done (text+extras path) |
 | P5 | Hardening, Docker, frame dump, docs polish | planned |
 
 ## License

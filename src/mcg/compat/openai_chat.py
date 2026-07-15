@@ -6,7 +6,9 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
+
+from mcg.multimodal.adapter import extract_from_content, render_multimodal_prompt
 
 from .canonical import CanonicalMessage, CanonicalRequest, CanonicalTool
 
@@ -31,29 +33,38 @@ def _extract_text(content: Any) -> str:
         return ""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        texts: list[str] = []
-        for part in content:
-            if isinstance(part, dict):
-                if part.get("type") in ("text", "input_text") and part.get("text"):
-                    texts.append(str(part["text"]))
-                elif part.get("type") == "image_url":
-                    url = (part.get("image_url") or {}).get("url") or ""
-                    texts.append(f"[image:{url[:120]}]")
-        return "\n".join(texts)
-    return str(content)
+    bundle = extract_from_content(content)
+    if bundle.parts:
+        return render_multimodal_prompt(bundle.text, bundle.parts)
+    return bundle.text
 
 
 def to_canonical(req: OpenAIChatRequest) -> CanonicalRequest:
     messages: list[CanonicalMessage] = []
+    all_parts = []
     for m in req.messages:
         role = m.get("role") or "user"
         if role not in ("system", "user", "assistant", "tool"):
             role = "user"
+        raw = m.get("content")
+        if role in ("user", "system"):
+            bundle = extract_from_content(raw)
+            if bundle.parts:
+                all_parts.extend(bundle.parts)
+                content = render_multimodal_prompt(bundle.text, bundle.parts)
+            else:
+                content = bundle.text
+        elif role == "assistant":
+            if isinstance(raw, str) or raw is None:
+                content = raw or ""
+            else:
+                content = extract_from_content(raw).text
+        else:  # tool
+            content = raw if isinstance(raw, str) else _extract_text(raw)
         messages.append(
             CanonicalMessage(
                 role=role,
-                content=_extract_text(m.get("content")),
+                content=content or "",
                 name=m.get("name"),
                 tool_call_id=m.get("tool_call_id"),
                 tool_calls=m.get("tool_calls"),
@@ -82,7 +93,10 @@ def to_canonical(req: OpenAIChatRequest) -> CanonicalRequest:
         stream=req.stream,
         conversation_id=req.conversation_id,
         user=req.user,
-        extra={"reset_conversation": req.reset_conversation},
+        extra={
+            "reset_conversation": req.reset_conversation,
+            "multimodal_parts": all_parts,
+        },
     )
 
 
@@ -118,15 +132,10 @@ def final_openai_response(
 
 
 def _openai_tool_call_deltas(tool_calls: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Expand full tool_calls into OpenAI streaming delta fragments.
-
-    Clients (Cursor / OpenAI SDK) expect index + partial function fields, not a
-    single bare tool_calls dump on the final chunk.
-    """
+    """Expand full tool_calls into OpenAI streaming delta fragments."""
     deltas: list[dict[str, Any]] = []
     for i, tc in enumerate(tool_calls):
         fn = tc.get("function") or {}
-        # id + type + name first
         deltas.append(
             {
                 "index": i,
@@ -138,7 +147,6 @@ def _openai_tool_call_deltas(tool_calls: list[dict[str, Any]]) -> list[dict[str,
         args = fn.get("arguments") or ""
         if not isinstance(args, str):
             args = json.dumps(args, ensure_ascii=False)
-        # arguments (can be one chunk; streaming split is optional polish)
         if args:
             deltas.append(
                 {
@@ -156,11 +164,7 @@ async def stream_openai_chunks(
     tool_calls_holder: list[dict[str, Any]] | None = None,
     conversation_id: str | None = None,
 ) -> AsyncIterator[str]:
-    """SSE chat.completion.chunk stream.
-
-    If tool_calls_holder is provided, it is filled by the caller after text is
-    complete (by parsing full text); we then emit proper tool_call deltas.
-    """
+    """SSE chat.completion.chunk stream."""
     cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
     created = int(time.time())
 

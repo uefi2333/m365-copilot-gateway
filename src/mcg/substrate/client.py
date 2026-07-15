@@ -71,6 +71,7 @@ class SubstrateClient:
         session_id: str | None = None,
         is_start_of_session: bool = True,
         message_history: list[dict[str, Any]] | None = None,
+        message_extras: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         conv = conversation_id or str(uuid.uuid4())
         sess = session_id or str(uuid.uuid4())
@@ -101,6 +102,7 @@ class SubstrateClient:
                     is_start_of_session=is_start_of_session,
                     time_zone=self.time_zone,
                     message_history=message_history,
+                    message_extras=message_extras,
                 )
                 await ws.send(invoke)
                 async for chunk in self._read_stream(ws):

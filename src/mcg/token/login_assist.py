@@ -37,8 +37,8 @@ code{background:#1a2332;padding:.1rem .3rem;border-radius:4px}
 <h1>M365 Copilot Gateway — 登录助手</h1>
 <div class="card">
 <p>1. 已尝试打开登录页。若未打开，点：
-<a href="{auth_url}" target="_blank" rel="noopener">打开 Microsoft 登录</a></p>
-<p class="muted">auth_url 文件：<code>{url_file}</code></p>
+<a href="__AUTH_URL__" target="_blank" rel="noopener">打开 Microsoft 登录</a></p>
+<p class="muted">auth_url 文件：<code>__URL_FILE__</code></p>
 <p>2. 登录后浏览器会到 <code>oauth2/nativeclient?code=...</code>
 （页面可能显示 wrongplace，没关系）。</p>
 <p>3. 把<strong>完整地址栏 URL</strong>（含 code=）粘贴到下方提交。</p>
@@ -50,7 +50,7 @@ code{background:#1a2332;padding:.1rem .3rem;border-radius:4px}
 <p style="margin-top:.75rem"><button type="submit">完成登录 / Finish</button></p>
 </form>
 </div>
-<p class="muted">account_key={account_key} · label={label} · 本页仅监听 127.0.0.1</p>
+<p class="muted">account_key=__ACCOUNT_KEY__ · label=__LABEL__ · 本页仅监听 127.0.0.1</p>
 </body></html>
 """
 
@@ -111,11 +111,12 @@ def run_login_assist(
                 }
                 self._send(200, json.dumps(payload), "application/json")
                 return
-            page = ASSIST_HTML.format(
-                auth_url=html.escape(state["auth_url"], quote=True),
-                url_file=html.escape(state["url_file"]),
-                account_key=html.escape(state["account_key"]),
-                label=html.escape(state["label"] or ""),
+            page = (
+                ASSIST_HTML
+                .replace("__AUTH_URL__", html.escape(state["auth_url"], quote=True))
+                .replace("__URL_FILE__", html.escape(state["url_file"]))
+                .replace("__ACCOUNT_KEY__", html.escape(state["account_key"]))
+                .replace("__LABEL__", html.escape(state["label"] or ""))
             )
             self._send(200, page)
 

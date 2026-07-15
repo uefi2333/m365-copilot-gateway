@@ -65,6 +65,12 @@ class ToolsConfig(BaseModel):
     repair_rounds: int = 1
     execution: Literal["client", "local"] = "client"
     strategies: list[str] = Field(default_factory=lambda: ["fenced", "shell_route"])
+    # local runner
+    local_timeout_sec: float = 30.0
+    local_max_output_bytes: int = 32000
+    local_cwd: str | None = None
+    local_shell: bool = True
+    local_allow_names: list[str] = Field(default_factory=list)
 
 
 class ModelEntry(BaseModel):

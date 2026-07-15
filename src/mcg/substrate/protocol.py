@@ -136,7 +136,24 @@ def build_chat_invoke(
     options_sets: list[str] | None = None,
     plugins: list[dict[str, Any]] | None = None,
     message_history: list[dict[str, Any]] | None = None,
+    message_extras: dict[str, Any] | None = None,
 ) -> str:
+    message: dict[str, Any] = {
+        "author": "user",
+        "inputMethod": "Keyboard",
+        "text": text,
+        "entityAnnotationTypes": ["People", "File", "Event", "Email", "TeamsMessage"],
+        "requestId": request_id,
+        "locationInfo": {"timeZoneOffset": time_zone_offset, "timeZone": time_zone},
+        "locale": locale,
+        "messageType": "Chat",
+        "experienceType": "Default",
+        "adaptiveCards": [],
+        "clientPreferences": {},
+    }
+    if message_extras:
+        # Best-effort multimodal keys (imageBase64 / imageUrl / …)
+        message.update(message_extras)
     payload: dict[str, Any] = {
         "arguments": [
             {
@@ -162,19 +179,7 @@ def build_chat_invoke(
                     "deviceOS": "Linux",
                     "deviceType": "Desktop",
                 },
-                "message": {
-                    "author": "user",
-                    "inputMethod": "Keyboard",
-                    "text": text,
-                    "entityAnnotationTypes": ["People", "File", "Event", "Email", "TeamsMessage"],
-                    "requestId": request_id,
-                    "locationInfo": {"timeZoneOffset": time_zone_offset, "timeZone": time_zone},
-                    "locale": locale,
-                    "messageType": "Chat",
-                    "experienceType": "Default",
-                    "adaptiveCards": [],
-                    "clientPreferences": {},
-                },
+                "message": message,
                 "plugins": plugins or [{"Id": "BingWebSearch", "Source": "BuiltIn"}],
                 "isSbsSupported": True,
                 "tone": tone,

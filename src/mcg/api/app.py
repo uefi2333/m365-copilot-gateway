@@ -11,10 +11,12 @@ from mcg.models_catalog import ModelInfo, list_models
 from mcg.pool.store import AccountPool
 from mcg.pool.sessions import SessionStore
 from mcg.token.fabric import TokenFabric
+from mcg.tools.local_exec import LocalToolRunner
 from mcg.tools.loop import ToolLoop
 from mcg.token.keepalive import TokenKeepAlive
 
 from .routes_admin import router as admin_router
+from .routes_anthropic import router as anthropic_router
 from .routes_openai import router as openai_router
 from .routes_ui import router as ui_router
 
@@ -54,13 +56,22 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     ]
     models = list_models(extra_models)
     tool_loop = ToolLoop(strategies=cfg.tools.strategies, max_rounds=cfg.tools.max_rounds)
+    local_runner = LocalToolRunner(
+        enabled=(cfg.tools.execution == "local"),
+        timeout_sec=cfg.tools.local_timeout_sec,
+        max_output_bytes=cfg.tools.local_max_output_bytes,
+        cwd=cfg.tools.local_cwd,
+        shell=cfg.tools.local_shell,
+        allow_names=cfg.tools.local_allow_names or None,
+    )
 
-    app = FastAPI(title="M365 Copilot Gateway", version="0.1.0")
+    app = FastAPI(title="M365 Copilot Gateway", version="0.2.0")
     app.state.config = cfg
     app.state.fabric = fabric
     app.state.pool = pool
     app.state.models = models
     app.state.tool_loop = tool_loop
+    app.state.local_runner = local_runner
     app.state.sessions = SessionStore()
     app.state.request_log = []  # ring buffer of recent requests
 
@@ -90,6 +101,7 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
         )
 
     app.include_router(openai_router)
+    app.include_router(anthropic_router)
     app.include_router(admin_router)
     app.include_router(ui_router)
 
@@ -103,10 +115,17 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
         active = sum(1 for a in accounts if a.get("token_valid") and a.get("status") == "active")
         return {
             "ok": True,
-            "version": "0.1.0",
+            "version": "0.2.0",
             "accounts_total": len(accounts),
             "accounts_active": active,
             "models": len(models),
+            "features": {
+                "openai_chat": True,
+                "anthropic_messages": True,
+                "models_probe": True,
+                "multimodal": True,
+                "tool_execution": cfg.tools.execution,
+            },
             "keepalive": {
                 "enabled": keepalive.enabled,
                 "interval_sec": keepalive.interval_sec,
