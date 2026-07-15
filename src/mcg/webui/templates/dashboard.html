@@ -224,6 +224,15 @@
       max-width: 360px;
       margin: 40px auto;
     }
+    .setup-card {
+      border-color: rgba(91, 141, 239, 0.35);
+      background: linear-gradient(180deg, #141a24 0%, var(--panel) 100%);
+    }
+    .setup-card ol { margin: 0; padding-left: 18px; }
+    .setup-card li { margin: 8px 0; color: var(--text); font-size: 13px; }
+    .setup-card code, .setup-card .mono { color: #9ec1ff; }
+    .copy-row { display: flex; gap: 8px; align-items: stretch; margin-top: 10px; }
+    .copy-row input { flex: 1; }
     footer {
       text-align: center;
       color: var(--dim);
@@ -244,10 +253,10 @@
 
 <main>
   {% if ok %}
-  <div class="flash ok">完成 · {{ ok }}</div>
+  <div class="flash ok">{{ ok_text or ('完成 · ' ~ ok) }}</div>
   {% endif %}
   {% if err %}
-  <div class="flash err">失败 · {{ err }}{% if msg %} — {{ msg }}{% endif %}</div>
+  <div class="flash err">{{ err_text or ('失败 · ' ~ err) }}{% if msg %} — {{ msg }}{% endif %}</div>
   {% endif %}
 
   <section class="metrics">
@@ -256,6 +265,37 @@
     <div class="metric"><div class="k">模型</div><div class="v">{{ models|length }}</div></div>
     <div class="metric"><div class="k">端点</div><div class="v" style="font-size:14px;margin-top:12px;font-family:var(--mono)">/v1/chat/completions</div></div>
   </section>
+
+  {% if authed and accounts|length == 0 %}
+  <section class="panel setup-card">
+    <h2>首次接入</h2>
+    <ol>
+      <li>用下方 <strong>PKCE 登录</strong>（推荐）或粘贴 substrate JWT</li>
+      <li>账号出现在「账号池」且状态为有效</li>
+      <li>客户端 Base URL：<span class="mono">{{ base_url }}/v1</span>，API Key 用 config 里的 <span class="mono">gateway.api_keys</span></li>
+      <li>自检：<span class="mono">curl -s {{ base_url }}/health</span></li>
+    </ol>
+    <p class="hint">需要已开通 Microsoft 365 Copilot 的企业账号。令牌仅存本机 <span class="mono">data/</span>。</p>
+  </section>
+  {% endif %}
+
+  {% if authed %}
+  <section class="panel">
+    <h2>客户端接入</h2>
+    <div class="field">
+      <label>Base URL</label>
+      <div class="copy-row">
+        <input id="base-url" class="mono" readonly value="{{ base_url }}/v1" />
+        <button type="button" class="btn ghost sm" data-copy="base-url">复制</button>
+      </div>
+    </div>
+    <div class="field">
+      <label>示例（OpenAI SDK / curl）</label>
+      <div class="codebox" id="curl-ex">curl {{ base_url }}/v1/models -H "Authorization: Bearer &lt;api_key&gt;"</div>
+    </div>
+    <p class="hint">Open WebUI / Cursor / Claude Code / Codex：把 Base URL 指到上面，模型填 <span class="mono">m365-copilot</span> 或 GET /v1/models 列表中的 id。</p>
+  </section>
+  {% endif %}
 
   {% if not authed %}
   <section class="panel login-box">

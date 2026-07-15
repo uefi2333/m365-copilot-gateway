@@ -4,6 +4,8 @@ import time
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+from mcg.api.errors import map_runtime, map_substrate
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from mcg.auth.deps import require_api_key
@@ -47,7 +49,7 @@ async def anthropic_messages(
     try:
         account = pool.acquire(sticky_key=body.user)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise map_runtime(exc) from exc
 
     # Fast path: SC/hop2 before token ensure (no JWT/WS needed)
     canon = to_canonical(body)
@@ -237,7 +239,7 @@ async def anthropic_messages(
             pool.refresh_token(account.id, live)
             account = pool.accounts[account.id]
     except RuntimeError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise map_runtime(exc) from exc
 
     tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
     prompt = tool_loop.augment_prompt(canon) if canon.tools else canon.prompt_text()
@@ -340,7 +342,7 @@ async def anthropic_messages(
         )
     except SubstrateError as exc:
         pool.mark_soft_error(account.id)
-        raise HTTPException(status_code=502, detail=f"substrate: {exc}") from exc
+        raise map_substrate(exc) from exc
     except Exception as exc:  # noqa: BLE001
         pool.mark_soft_error(account.id)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

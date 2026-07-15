@@ -1,13 +1,16 @@
 # Copy to config.yaml
 
 gateway:
+  # 0.0.0.0 if exposing via Docker / reverse proxy
   host: "127.0.0.1"
   port: 8080
-  # At least one key required for /v1/*
+  # Required for /v1/* — generate: openssl rand -hex 24
   api_keys:
     - "change-me-to-a-long-random-string"
+  # WebUI /ui password
   admin_password: "change-me-admin"
   data_dir: "./data"
+  # e.g. ["http://localhost:3000"] for browser frontends
   cors_origins: []
 
 substrate:

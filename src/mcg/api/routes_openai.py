@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+
+from mcg.api.errors import map_runtime, map_substrate
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from mcg.auth.deps import require_api_key
@@ -99,7 +101,7 @@ async def probe_models_live(
     try:
         account = pool.acquire()
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise map_runtime(exc) from exc
 
     fabric = request.app.state.fabric
     try:
@@ -113,7 +115,7 @@ async def probe_models_live(
             pool.refresh_token(account.id, live)
             account = pool.accounts[account.id]
     except RuntimeError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise map_runtime(exc) from exc
 
     def factory(_tone: str):
         return SubstrateClient(
@@ -221,7 +223,7 @@ async def chat_completions(
     try:
         account = pool.acquire(sticky_key=body.user)
     except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        raise map_runtime(exc) from exc
 
     # Deterministic tool short-circuit for slash/skill intents on the *latest user turn*.
     # Only short-circuit when nothing (assistant/tool) has answered that latest user msg yet.
@@ -532,7 +534,7 @@ async def chat_completions(
             pool.refresh_token(account.id, live)
             account = pool.accounts[account.id]
     except RuntimeError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        raise map_runtime(exc) from exc
 
     tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
     # Skip fat preamble on non-tool chat; keep compact for tools
@@ -885,7 +887,7 @@ async def chat_completions(
     except SubstrateError as exc:
         log.error("substrate 502: %s", exc)
         pool.mark_soft_error(account.id)
-        raise HTTPException(status_code=502, detail=f"substrate: {exc}") from exc
+        raise map_substrate(exc) from exc
     except Exception as exc:  # noqa: BLE001
         log.exception("chat 500: %s", exc)
         pool.mark_soft_error(account.id)

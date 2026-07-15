@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -75,6 +75,33 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     app.state.sessions = SessionStore()
     app.state.request_log = []  # ring buffer of recent requests
     app.state.studio_agent = None  # filled lazily / optional
+
+    @app.exception_handler(HTTPException)
+    async def _http_exc_handler(request, exc: HTTPException):
+        """Normalize dict details; keep OpenAI-ish shape for clients."""
+        from fastapi.responses import JSONResponse
+
+        detail = exc.detail
+        if isinstance(detail, dict) and "message" in detail:
+            body = {
+                "error": {
+                    "message": detail.get("message"),
+                    "type": detail.get("type") or "mcg_error",
+                    "code": detail.get("code"),
+                    "param": None,
+                }
+            }
+            if detail.get("hint"):
+                body["error"]["hint"] = detail["hint"]
+            if detail.get("raw"):
+                body["error"]["raw"] = detail["raw"]
+            return JSONResponse(status_code=exc.status_code, content=body)
+        if isinstance(detail, str):
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"error": {"message": detail, "type": "mcg_error", "code": None}},
+            )
+        return JSONResponse(status_code=exc.status_code, content={"error": {"message": str(detail)}})
 
     keepalive = TokenKeepAlive(
         fabric,

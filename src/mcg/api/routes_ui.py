@@ -32,6 +32,24 @@ async def ui_home(request: Request):
         accounts.append(row)
     active = sum(1 for a in accounts if a.get("token_valid"))
     cfg = request.app.state.config
+    err = request.query_params.get("err")
+    ok = request.query_params.get("ok")
+    flash_ok = {
+        "import": "账号已导入",
+        "deleted": "账号已删除",
+        "refresh": "令牌已刷新",
+        "pkce": "PKCE 登录成功",
+        "login": "已登录管理端",
+    }
+    flash_err = {
+        "login": "管理密码错误",
+        "auth": "请先登录管理端",
+        "import": "导入失败",
+        "pkce": "PKCE 交换失败",
+        "refresh": "刷新失败",
+    }
+    # public base for client snippets (best-effort)
+    base = str(request.base_url).rstrip("/")
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -44,9 +62,12 @@ async def ui_home(request: Request):
             "msal_client_id": cfg.token.msal_client_id,
             "use_sydney_msal": cfg.token.use_sydney_msal,
             "prefer_cdp": cfg.token.prefer_cdp,
-            "err": request.query_params.get("err"),
-            "ok": request.query_params.get("ok"),
+            "err": err,
+            "ok": ok,
             "msg": request.query_params.get("msg", ""),
+            "ok_text": flash_ok.get(ok or "", ""),
+            "err_text": flash_err.get(err or "", ""),
+            "base_url": base,
         },
     )
 

@@ -26,7 +26,10 @@
 
 ## Next (P1+)
 
-- [ ] Docker Compose
+- [x] Docker Compose + healthcheck
+- [x] Actionable API errors (`code` + `hint`)
+- [x] WebUI first-run + client snippet panel
+- [x] QUICKSTART.md
 - [ ] Frame dump CLI
 - [ ] Rate-limit aware queue from throttle fields
 - [ ] Stronger native multimodal protocol (tenant file upload / ODB)

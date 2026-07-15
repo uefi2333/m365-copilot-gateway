@@ -15,30 +15,35 @@
 | **Accounts** | Account pool, health, cooldown, round-robin / sticky; semi-auto import (browser / token paste) |
 | **Auth** | Gateway API keys, admin session for WebUI |
 | **WebUI** | Dashboard: pool, tokens TTL, request log, model list, import wizard |
-| **Ops** | Docker, structured logs, frame dump, `/health` |
+| **Ops** | Docker Compose, `/health`, keepalive, structured logs |
 
 ## Quick start
 
+Full walkthrough: [docs/QUICKSTART.md](docs/QUICKSTART.md).
+
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[browser,dev]"
-
-# first-time config
+pip install -e .
 cp config.example.yaml config.yaml
-# edit gateway.api_keys and data_dir
+# set gateway.api_keys + gateway.admin_password
 
 mcg serve
 # API  http://127.0.0.1:8080/v1
-# UI   http://127.0.0.1:8080/ui
+# UI   http://127.0.0.1:8080/ui  ← login, then PKCE / paste JWT
 ```
 
-Point any OpenAI-compatible client at:
+Docker:
+
+```bash
+cp config.example.yaml config.yaml   # edit secrets
+docker compose up -d --build
+```
 
 | Setting | Value |
 |---------|--------|
 | Base URL | `http://127.0.0.1:8080/v1` |
-| API Key | your `gateway.api_keys` entry |
-| Model | `m365-copilot` (or see `GET /v1/models`) |
+| API Key | `gateway.api_keys` entry |
+| Model | `m365-copilot` or `GET /v1/models` |
 
 ## Architecture
 
@@ -156,7 +161,13 @@ on the chat message (tenant may ignore unknown fields).
 | P2 | Dynamic tools multi-agent loop (client + local) | done |
 | P3 | Model list + live probe | done |
 | P4 | Multimodal adapters | done (text+extras path) |
-| P5 | Hardening, Docker, frame dump, docs polish | planned |
+| P5 | Hardening, Docker Compose, UX errors, docs | in progress |
+
+## Requirements
+
+- Python 3.11+
+- M365 account with **Copilot** license (work/school)
+- Network access to `login.microsoftonline.com` and `substrate.office.com`
 
 ## License
 
