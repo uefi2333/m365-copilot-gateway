@@ -53,6 +53,13 @@ def main(argv: list[str] | None = None) -> None:
         default=None,
         help="paste redirect URL or code=… to complete exchange",
     )
+    p_login.add_argument(
+        "--assist",
+        action="store_true",
+        help="open local paste page (127.0.0.1) + browser; lightest semi-auto login",
+    )
+    p_login.add_argument("--assist-port", type=int, default=17890)
+    p_login.add_argument("--no-browser", action="store_true", help="with --assist, do not auto-open browser")
 
     p_imp = sub.add_parser("import-token", help="import substrate access JWT (paste / file)")
     p_imp.add_argument("token_file", help="file containing JWT (or - for stdin)")
@@ -116,7 +123,7 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "login":
         account_id = args.account_id or f"pending-{uuid.uuid4().hex[:10]}"
-        if not args.finish:
+        if not args.finish and not args.assist:
             info = asyncio.run(fabric.login_pkce_start(account_key=account_id))
             print("=== M365 Sydney PKCE (mature path) ===")
             print(f"client_id: {info['client_id']}")
@@ -126,6 +133,8 @@ def main(argv: list[str] | None = None) -> None:
             print("and trigger AADSTS70011. Prefer opening the local file or WebUI link.")
             url_file = data_dir / "msal" / "last_auth_url.txt"
             print(f"auth_url_file: {url_file}")
+            print()
+            print("Lightest path:  mcg login --assist --label me")
             print()
             print("1) Open the auth URL (from file above, or the line below) in a browser:")
             print(info["auth_url"])
@@ -138,6 +147,64 @@ def main(argv: list[str] | None = None) -> None:
             print(
                 f'   mcg -c {args.config} login --id {account_id} '
                 f'--finish "PASTE_URL_HERE" --label "{args.label or "me"}"'
+            )
+            return
+
+        if args.assist and not args.finish:
+            info = asyncio.run(fabric.login_pkce_start(account_key=account_id))
+            url_file = data_dir / "msal" / "last_auth_url.txt"
+            label = args.label or "me"
+
+            def _finish(code_or_url: str) -> dict:
+                st = asyncio.run(
+                    fabric.login_pkce_finish(
+                        code_or_url, account_id=account_id, account_key=account_id
+                    )
+                )
+                if not st.valid:
+                    return {"ok": False, "error": st.error or "pkce failed"}
+                token = fabric.get_hot(account_id)
+                assert token
+                from mcg.token.jwtutil import decode_jwt_payload
+
+                claims = decode_jwt_payload(token)
+                real_id = str(claims.get("oid") or account_id)
+                if real_id != account_id:
+                    fabric.put_hot(real_id, token)
+                    fabric.rekey_msal_artifacts(account_id, real_id)
+                acc = pool.import_token(token, label=label)
+                fabric.rekey_msal_artifacts(account_id, acc.id)
+                rt = fabric.get_refresh_token(acc.id) or fabric.get_refresh_token(account_id)
+                if rt:
+                    fabric.put_refresh_token(acc.id, rt)
+                return {
+                    "ok": True,
+                    "account": acc.public_dict(),
+                    "ttl": st.seconds_remaining,
+                    "source": st.source,
+                    "has_refresh": bool(rt),
+                    "aud": claims.get("aud"),
+                }
+
+            from mcg.token.login_assist import run_login_assist
+
+            res = run_login_assist(
+                auth_url=info["auth_url"],
+                account_key=account_id,
+                label=label,
+                url_file=url_file,
+                finish_callback=_finish,
+                port=args.assist_port,
+                open_browser=not args.no_browser,
+            )
+            if not res.ok:
+                print(f"FAILED: {res.error}", file=sys.stderr)
+                sys.exit(1)
+            acc = res.account or {}
+            print(
+                f"OK account={acc.get('id')} label={acc.get('label')} "
+                f"ttl={res.raw.get('ttl') if res.raw else '?'}s "
+                f"has_refresh={res.raw.get('has_refresh') if res.raw else '?'}"
             )
             return
 
@@ -160,22 +227,7 @@ def main(argv: list[str] | None = None) -> None:
             if fabric.get_refresh_token(account_id):
                 fabric.put_refresh_token(real_id, fabric.get_refresh_token(account_id) or "")
         acc = pool.import_token(token, label=label)
-        # copy msal cache to oid key if needed
-        src = data_dir / "msal" / f"{account_id}.json"
-        dst = data_dir / "msal" / f"{acc.id}.json"
-        if src.exists() and src != dst:
-            try:
-                if not dst.exists():
-                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-                for suf in (".rt.json",):
-                    s2 = src.with_suffix(suf) if suf.startswith(".") else Path(str(src) + suf)
-                    # account_id.json.rt.json pattern
-                srt = data_dir / "msal" / f"{account_id}.rt.json"
-                drt = data_dir / "msal" / f"{acc.id}.rt.json"
-                if srt.exists() and not drt.exists():
-                    drt.write_text(srt.read_text(encoding="utf-8"), encoding="utf-8")
-            except OSError:
-                pass
+        fabric.rekey_msal_artifacts(account_id, acc.id)
         print(
             f"OK account={acc.id} label={acc.label} ttl={st.seconds_remaining}s "
             f"source={st.source} aud={claims.get('aud')}"

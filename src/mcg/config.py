@@ -43,6 +43,10 @@ class TokenConfig(BaseModel):
         "https://substrate.office.com/sydney/M365Chat.Read "
         "https://substrate.office.com/sydney/sydney.readwrite"
     )
+    # MSAL adds offline_access automatically; do not put reserved scopes here
+    # background silent refresh (no browser)
+    keepalive_enabled: bool = True
+    keepalive_interval_sec: int = 120
     # Legacy / experimental custom OAuth (ows etc.) — off by default
     oauth_client_id: str | None = None
     oauth_tenant: str = "common"

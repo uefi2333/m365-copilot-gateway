@@ -24,6 +24,8 @@ token:
   prefer_cdp: false
   # Mature: Office web Copilot client + Sydney scopes (cramt/lezi)
   use_sydney_msal: true
+  keepalive_enabled: true
+  keepalive_interval_sec: 120
   msal_client_id: "c0ab8ce9-e9a0-42e7-b064-33d422df41f1"
   msal_authority: "https://login.microsoftonline.com/common"
   msal_redirect_uri: "https://login.microsoftonline.com/common/oauth2/nativeclient"

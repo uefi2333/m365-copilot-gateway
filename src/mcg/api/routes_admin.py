@@ -190,6 +190,38 @@ async def device_login(
     return out
 
 
+
+@router.post("/auth/keepalive/tick")
+async def keepalive_tick(request: Request, _key: str = Depends(require_api_key)):
+    """Manual silent refresh pass (same as background keepalive)."""
+    ka = getattr(request.app.state, "keepalive", None)
+    if not ka:
+        raise HTTPException(status_code=503, detail="keepalive not running")
+    return {"ok": True, **(await ka.tick_once())}
+
+
+@router.get("/auth/status")
+async def auth_status(request: Request, _key: str = Depends(require_api_key)):
+    pool = request.app.state.pool
+    fabric = request.app.state.fabric
+    ka = getattr(request.app.state, "keepalive", None)
+    accounts = []
+    for a in pool.list_public():
+        st = fabric.status_dict(a["id"], pool.accounts[a["id"]].token if a["id"] in pool.accounts else None)
+        accounts.append({**a, **{k: st.get(k) for k in (
+            "has_refresh_token","msal_cache","msal_sidecar_rt","needs_refresh","use_sydney_msal"
+        )}})
+    return {
+        "ok": True,
+        "keepalive": {
+            "enabled": bool(ka and ka.enabled),
+            "interval_sec": getattr(ka, "interval_sec", None),
+            "last": getattr(ka, "last", None),
+        } if ka else None,
+        "accounts": accounts,
+    }
+
+
 @router.post("/accounts/{account_id}/refresh")
 async def refresh_account(
     account_id: str,

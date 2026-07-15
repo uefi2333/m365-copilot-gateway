@@ -12,6 +12,7 @@ from mcg.pool.store import AccountPool
 from mcg.pool.sessions import SessionStore
 from mcg.token.fabric import TokenFabric
 from mcg.tools.loop import ToolLoop
+from mcg.token.keepalive import TokenKeepAlive
 
 from .routes_admin import router as admin_router
 from .routes_openai import router as openai_router
@@ -63,6 +64,22 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     app.state.sessions = SessionStore()
     app.state.request_log = []  # ring buffer of recent requests
 
+    keepalive = TokenKeepAlive(
+        fabric,
+        pool,
+        interval_sec=getattr(cfg.token, "keepalive_interval_sec", 120),
+        enabled=getattr(cfg.token, "keepalive_enabled", True),
+    )
+    app.state.keepalive = keepalive
+
+    @app.on_event("startup")
+    async def _startup_keepalive() -> None:
+        keepalive.start()
+
+    @app.on_event("shutdown")
+    async def _shutdown_keepalive() -> None:
+        await keepalive.stop()
+
     if cfg.gateway.cors_origins:
         app.add_middleware(
             CORSMiddleware,
@@ -90,6 +107,11 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
             "accounts_total": len(accounts),
             "accounts_active": active,
             "models": len(models),
+            "keepalive": {
+                "enabled": keepalive.enabled,
+                "interval_sec": keepalive.interval_sec,
+                "last": keepalive.last,
+            },
         }
 
     return app

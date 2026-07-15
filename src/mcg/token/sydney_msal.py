@@ -41,6 +41,8 @@ SYDNEY_SCOPES = [
     "https://substrate.office.com/sydney/M365Chat.Read",
     "https://substrate.office.com/sydney/sydney.readwrite",
 ]
+# MSAL auto-adds openid/profile/offline_access (reserved — do not list them)
+
 # Extra scopes used by cramt for Copilot Studio agent mgmt (optional acquire)
 PP_SCOPE = "https://api.powerplatform.com/.default"
 BAP_SCOPE = "https://api.bap.microsoft.com/.default"
@@ -318,25 +320,50 @@ self, token_response: dict[str, Any]) -> None:
                     return
             except Exception:  # noqa: BLE001
                 pass
-        # Fallback: keep a sidecar refresh store next to MSAL cache
+        # Always keep sidecar RT for silent HTTP refresh (lightweight, no browser)
+        if rt:
+            side = self.cache_file.with_suffix(".rt.json")
+            side.write_text(
+                json.dumps(
+                    {
+                        "refresh_token": rt,
+                        "client_id": self.client_id,
+                        "scopes": self.scopes,
+                        "updated_at": int(time.time()),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            try:
+                side.chmod(0o600)
+            except OSError:
+                pass
+        self._save(cache)
+
+    def seed_sidecar_rt(self, refresh_token: str) -> None:
+        """Write/update sidecar RT so silent refresh works without full MSAL cache."""
+        if not refresh_token:
+            return
         side = self.cache_file.with_suffix(".rt.json")
-        side.write_text(
-            json.dumps(
-                {
-                    "refresh_token": rt,
-                    "client_id": self.client_id,
-                    "scopes": self.scopes,
-                    "updated_at": int(time.time()),
-                },
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
+        data = {
+            "refresh_token": refresh_token,
+            "client_id": self.client_id,
+            "scopes": self.scopes,
+            "updated_at": int(time.time()),
+        }
+        if side.exists():
+            try:
+                prev = json.loads(side.read_text(encoding="utf-8"))
+                if isinstance(prev, dict):
+                    data = {**prev, **data}
+            except Exception:
+                pass
+        side.write_text(json.dumps(data, indent=2), encoding="utf-8")
         try:
             side.chmod(0o600)
         except OSError:
             pass
-        self._save(cache)
 
     def refresh_with_sidecar_rt(self, timeout: float = 30.0) -> TokenBundle | None:
         """HTTP refresh using sidecar RT if MSAL silent failed."""

@@ -104,6 +104,11 @@ class TokenFabric:
             return
         self._refresh_tokens[account_id] = refresh_token
         self._save_refresh_store()
+        # also seed MSAL sidecar so silent path works without separate store
+        try:
+            self._sydney(account_key=account_id).seed_sidecar_rt(refresh_token)
+        except Exception:  # noqa: BLE001
+            pass
 
     def get_refresh_token(self, account_id: str) -> str | None:
         return self._refresh_tokens.get(account_id)
@@ -272,13 +277,39 @@ class TokenFabric:
             st = self.put_hot(account_id, b.access_token)
             if b.refresh_token:
                 self.put_refresh_token(account_id, b.refresh_token)
+                # keep under key used for msal cache too
+                if key != account_id:
+                    self.put_refresh_token(key, b.refresh_token)
             if st.valid:
-                st.source = "pkce"
+                st.source = f"pkce:{b.source}"
             else:
                 st = TokenStatus(False, "pkce", 0, st.error or "aud not substrate")
             return st
 
         return await asyncio.to_thread(_run)
+
+    def rekey_msal_artifacts(self, from_key: str, to_key: str) -> None:
+        """Copy MSAL cache / sidecar RT from pending key to oid account id."""
+        if not from_key or not to_key or from_key == to_key:
+            return
+        msal_dir = self.data_dir / "msal"
+        for name in (f"{from_key}.json", f"{from_key}.rt.json"):
+            src = msal_dir / name
+            if not src.exists():
+                continue
+            dst = msal_dir / name.replace(from_key, to_key, 1)
+            try:
+                if not dst.exists():
+                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                    try:
+                        dst.chmod(0o600)
+                    except OSError:
+                        pass
+            except OSError:
+                pass
+        rt = self.get_refresh_token(from_key)
+        if rt:
+            self.put_refresh_token(to_key, rt)
 
     async def login_device_code(
         self,

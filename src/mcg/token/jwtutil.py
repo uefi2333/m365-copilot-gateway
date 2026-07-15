@@ -17,10 +17,17 @@ def decode_jwt_payload(token: str) -> dict[str, Any]:
     return json.loads(base64.urlsafe_b64decode(payload.encode("ascii")))
 
 
-def is_substrate_token(claims: dict[str, Any]) -> bool:
+def is_substrate_token(claims: dict[str, Any] | str) -> bool:
+    if isinstance(claims, str):
+        claims = decode_jwt_payload(claims)
     return str(claims.get("aud", "")).startswith(SUBSTRATE_AUD_PREFIX)
 
 
-def seconds_remaining(claims: dict[str, Any]) -> int:
+def seconds_remaining(claims_or_token: dict[str, Any] | str) -> int:
+    claims = (
+        decode_jwt_payload(claims_or_token)
+        if isinstance(claims_or_token, str)
+        else claims_or_token
+    )
     exp = int(claims.get("exp") or 0)
     return max(0, exp - int(time.time()))
