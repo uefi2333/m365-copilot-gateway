@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from mcg.compat.canonical import CanonicalRequest, CanonicalTool
-from .inject import build_tool_preamble
+from .inject import build_tool_preamble, request_has_tool_results
 
 FENCE_RE = re.compile(r"```([a-zA-Z0-9_\-\.]+)\s*\n(.*?)```", re.DOTALL)
 JSON_TOOL_RE = re.compile(r'\{\s*"tool_calls"\s*:\s*\[.*?\]\s*\}', re.DOTALL)
@@ -155,7 +155,11 @@ class ToolLoop:
 
     def augment_prompt(self, req: CanonicalRequest) -> str:
         base = req.prompt_text()
-        preamble = build_tool_preamble(req.tools, self.strategies)
+        preamble = build_tool_preamble(
+            req.tools,
+            self.strategies,
+            has_tool_results=request_has_tool_results(req),
+        )
         if not preamble:
             return base
         return f"{preamble}\n\n---\n\n{base}"
