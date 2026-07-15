@@ -73,6 +73,9 @@ class ToolsConfig(BaseModel):
     local_cwd: str | None = None
     local_shell: bool = True
     local_allow_names: list[str] = Field(default_factory=list)
+    # Copilot Studio declarative agent (raises tool-call compliance; not native tools)
+    studio_agent_enabled: bool = False
+    studio_agent_cache: str | None = None
 
 
 class ModelEntry(BaseModel):

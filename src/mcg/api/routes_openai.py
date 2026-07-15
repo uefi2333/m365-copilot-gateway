@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -14,12 +15,13 @@ from mcg.compat.openai_chat import (
     stream_openai_chunks,
     to_canonical,
 )
-from mcg.models_catalog import resolve_tone
+from mcg.models_catalog import resolve_tone, tone_for_tools
 from mcg.models_probe import catalog_snapshot, entries_to_openai, live_probe
 from mcg.multimodal.adapter import substrate_message_extras
 from mcg.substrate.client import SubstrateClient, SubstrateError
 from mcg.tools.stream_filter import StreamToolAccumulator, iter_filtered_stream
 from mcg.tools.repair import maybe_repair_tool_call
+from mcg.tools.sanitize import strip_reasoning_leak
 
 router = APIRouter()
 
@@ -204,7 +206,7 @@ async def chat_completions(
         raise HTTPException(status_code=401, detail=str(exc)) from exc
 
     canon = to_canonical(body)
-    tone = resolve_tone(canon.model, models)
+    tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
     prompt = tool_loop.augment_prompt(canon)
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None
@@ -244,12 +246,39 @@ async def chat_completions(
             timeout_sec=cfg.substrate.request_timeout_sec,
         )
 
+        # Optional Copilot Studio agent — only when tools present (cramt §5/§10:
+        # agent forces GPT and breaks Claude/reasoning tones for plain chat).
+        agent_id = None
+        if canon.tools and cfg.tools.studio_agent_enabled:
+            mgr = getattr(request.app.state, "studio_agent", None)
+            if mgr is None:
+                from mcg.agent.studio import StudioAgentManager
+
+                cache = cfg.tools.studio_agent_cache or str(
+                    Path(cfg.gateway.data_dir) / "studio_agent.json"
+                )
+                # tokens optional; manager returns None if missing
+                bap = getattr(fabric, "get_scope_token", None)
+                bap_tok = pp_tok = None
+                # best-effort: reuse account sydney token won't work for PP/BAP
+                mgr = StudioAgentManager(
+                    cache_path=cache,
+                    bap_token=None,
+                    pp_token=None,
+                )
+                request.app.state.studio_agent = mgr
+            try:
+                agent_id = await mgr.get_agent_id()
+            except Exception:  # noqa: BLE001
+                agent_id = None
+
         stream_kwargs = dict(
             tone=tone,
             conversation_id=sess.conversation_id,
             session_id=sess.session_id,
             is_start_of_session=is_start,
             message_extras=msg_extras,
+            agent_id=agent_id,
         )
 
         # local tool loop only for non-stream + shell-capable tools
@@ -301,15 +330,17 @@ async def chat_completions(
                             canon=canon,
                             stream_kwargs=stream_kwargs,
                             full_text=acc.full,
-                            repair_rounds=cfg.tools.repair_rounds,
+                            # 0 soft-repair: hard refuse forces immediately
+                            repair_rounds=0 if canon.tools else cfg.tools.repair_rounds,
                         )
                         tool_holder: list = list(parsed.tool_calls)
 
                         async def text_out():
                             if tool_holder:
                                 return
-                            # no tool call — stream residual clean text as one chunk
-                            text = (parsed.text or acc.full or "").strip()
+                            text = strip_reasoning_leak(
+                                (parsed.text or acc.full or "").strip()
+                            )
                             if text:
                                 yield text
 
@@ -349,14 +380,20 @@ async def chat_completions(
             canon=canon,
             stream_kwargs=stream_kwargs,
             full_text=full,
-            repair_rounds=cfg.tools.repair_rounds,
+            # tools: force on refuse, no soft repair round (latency)
+            repair_rounds=0 if canon.tools else 0,
         )
         pool.mark_success(account.id)
         sessions.touch(sticky, success=True)
+        content = (
+            strip_reasoning_leak(parsed.text)
+            if parsed.tool_calls
+            else strip_reasoning_leak(parsed.text or full)
+        )
         return JSONResponse(
             final_openai_response(
                 model=canon.model,
-                content=parsed.text if parsed.tool_calls else full,
+                content=content,
                 tool_calls=parsed.tool_calls or None,
                 conversation_id=sess.conversation_id,
             )

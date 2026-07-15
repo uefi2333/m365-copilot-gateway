@@ -220,7 +220,8 @@ class ToolLoop:
         )
         if not preamble:
             return base
-        return f"{preamble}\n\n---\n\n{base}"
+        # Tools AFTER user text — closer to generation.
+        return f"{base}\n\n---\n\n{preamble}"
 
     def parse(self, model_text: str, tools: list[CanonicalTool]) -> ParsedTools:
         if not tools:

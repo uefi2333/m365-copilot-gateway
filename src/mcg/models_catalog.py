@@ -21,7 +21,8 @@ class ModelInfo:
 DEFAULT_MODELS: list[ModelInfo] = [
     ModelInfo("m365-copilot", "Magic", "M365 Copilot (auto)", "auto"),
     ModelInfo("auto", "Magic", "Auto / Magic", "auto"),
-    ModelInfo("quick", "Gpt_Quick", "Quick", "gpt"),
+    # Gpt_Quick often returns empty on enterprise substrate — map to Magic
+    ModelInfo("quick", "Magic", "Quick (Magic)", "gpt"),
     ModelInfo("reasoning", "Gpt_Reasoning", "Think deeper", "gpt"),
     ModelInfo("think-deeper", "Gpt_Reasoning", "Think deeper", "gpt"),
     ModelInfo("claude", "Claude_Sonnet", "Claude Sonnet tone", "claude"),
@@ -47,6 +48,24 @@ def resolve_tone(model_id: str, catalog: list[ModelInfo] | None = None) -> str:
     if model_id.lower().startswith("claude"):
         return "Claude_Sonnet"
     return "Magic"
+
+
+def tone_for_tools(tone: str, *, has_tools: bool) -> str:
+    """Reasoning tones meta-refuse tool prompts — force Chat/Magic for tool turns.
+
+    Connection tests + agent clients need tool_calls[], not analysis prose.
+    """
+    if not has_tools:
+        return tone if tone != "Gpt_Quick" else "Magic"
+    if "Reasoning" in tone or tone.endswith("_Reasoning"):
+        if tone.startswith("Gpt_5_5"):
+            return "Gpt_5_5_Chat"
+        if tone.startswith("Claude"):
+            return "Claude_Sonnet"
+        return "Magic"
+    if tone in ("Gpt_Quick",):
+        return "Magic"
+    return tone
 
 
 def list_models(extra: list[ModelInfo] | None = None) -> list[ModelInfo]:

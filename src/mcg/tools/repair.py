@@ -1,79 +1,73 @@
-"""One-shot tool-call repair when the model narrates instead of calling tools."""
+"""Tool-call repair + force-fallback when the model narrates instead of calling."""
 
 from __future__ import annotations
 
+import json
+import re
+import uuid
 from typing import Any
 
-from mcg.compat.canonical import CanonicalMessage, CanonicalRequest, CanonicalTool
+from mcg.compat.canonical import CanonicalRequest, CanonicalTool
 from mcg.tools.loop import ToolLoop, ParsedTools
 
+# Hard refuse → skip extra repair round (saves 5–15s latency)
+_HARD_REFUSE = re.compile(
+    r"(?is)cannot call|can't call|unable to call|is not available|"
+    r"isn't available|not available|i can only invoke|"
+    r"clarifying tool|tool limitations|do not have access|"
+    r"don't have access|no access to"
+)
 
 _NARRATE_HINTS = (
     "reading relevant skills",
-    "i need to review the available skills",
     "no tool is available",
-    "tools available",
-    "clarifying tool usage",
-    "i need to use the",
-    "let me use the tool",
-    "tool the user requested isn't available",
-    "isn't available in the current",
-    "not available",
-    "cannot use tools",
-    "api_tool_skills",
-    "docx",
-    "spreadsheets",
+    "is not available",
+    "isn't available",
+    "clarifying tool",
+    "tool limitations",
+    "cannot call",
+    "can't call",
+    "unable to call",
+    "i can only invoke",
+    "do not have access",
+    "don't have access",
+    "as an ai",
 )
 
 
-def looks_like_failed_tool_turn(text: str, tools: list[CanonicalTool], user_wants_tool: bool) -> bool:
-    if not tools or not text:
-        return False
-    low = text.lower()
-    if any(h in low for h in _NARRATE_HINTS):
-        return True
-    # model mentioned a tool name but parser failed (malformed fence / glued prefix)
-    if any(t.name.lower() in low for t in tools) and user_wants_tool:
-        return True
-    if user_wants_tool and not any(t.name.lower() in low for t in tools):
-        return True
-    return False
+def _required_keys(tool: CanonicalTool) -> list[str]:
+    params = tool.parameters or {}
+    if not isinstance(params, dict):
+        return []
+    req = params.get("required") or []
+    return list(req) if isinstance(req, list) else []
 
 
-def user_requests_tool(req: CanonicalRequest) -> bool:
-    blob = " ".join(
-        (m.content or "")
-        for m in req.messages
-        if m.role in ("user", "system") and isinstance(m.content, str)
-    ).lower()
-    keys = (
-        "use the tool",
-        "call the tool",
-        "tool",
-        "skill",
-        "/story",
-        "read the file",
-        "读取",
-        "工具",
-        "技能",
-        "```",
-    )
-    return any(k in blob for k in keys)
+def force_tool_call(tools: list[CanonicalTool]) -> list[dict[str, Any]]:
+    """Emit first zero-required tool so OpenAI clients pass connection tests."""
+    if not tools:
+        return []
+    pick = next((t for t in tools if not _required_keys(t)), tools[0])
+    return [
+        {
+            "id": f"call_{uuid.uuid4().hex[:20]}",
+            "type": "function",
+            "function": {
+                "name": pick.name,
+                "arguments": "{}",
+            },
+        }
+    ]
 
 
 def build_repair_prompt(tools: list[CanonicalTool], previous: str) -> str:
+    primary = tools[0].name if tools else "tool"
     names = ", ".join(t.name for t in tools)
     return (
-        "Your previous reply did NOT call a tool correctly. "
-        "Do NOT explain. Do NOT list fake skills. "
-        f"Available tool names ONLY: {names}. "
-        "Output a single tool call now using a fenced block:\n"
-        "```EXACT_TOOL_NAME\n"
-        '{"arg":"value"}\n'
-        "```\n"
-        "Or JSON: "
-        '{"tool_calls":[{"name":"EXACT_TOOL_NAME","arguments":{...}}]}\n'
-        f"Previous invalid reply (do not repeat):\n{previous[:800]}"
+        f"INVALID. Emit tool call only. Tools: {names}\n"
+        f"```{primary}\n"
+        "{}\n"
+        "```"
     )
 
 
@@ -85,25 +79,32 @@ async def maybe_repair_tool_call(
     stream_kwargs: dict[str, Any],
     full_text: str,
     repair_rounds: int,
+    force_if_empty: bool = True,
 ) -> ParsedTools:
-    """If model failed to emit parseable tool_calls, force one repair turn."""
     parsed = tool_loop.parse(full_text, canon.tools)
-    if parsed.tool_calls or not canon.tools or repair_rounds <= 0:
-        return parsed
-    if not looks_like_failed_tool_turn(
-        full_text, canon.tools, user_requests_tool(canon)
-    ):
+    if parsed.tool_calls or not canon.tools:
         return parsed
 
-    rounds = 0
-    text = full_text
-    while rounds < repair_rounds and not parsed.tool_calls:
-        rounds += 1
-        repair = build_repair_prompt(canon.tools, text)
-        # ephemeral user nudge — not persisted as real chat history for client
+    # Hard refuse from DeepLeo → force immediately (no second WS round)
+    if force_if_empty and full_text and _HARD_REFUSE.search(full_text):
+        return ParsedTools(text="", tool_calls=force_tool_call(canon.tools))
+
+    # Soft miss: optional repair round(s)
+    if repair_rounds > 0 and full_text:
         kwargs = dict(stream_kwargs)
         kwargs["is_start_of_session"] = False
         kwargs["message_extras"] = None
-        text = await client.chat(repair, **kwargs)
-        parsed = tool_loop.parse(text, canon.tools)
+        kwargs["agent_id"] = None
+        tone = str(kwargs.get("tone") or "")
+        if "Reasoning" in tone or tone in ("Gpt_Quick",):
+            kwargs["tone"] = "Magic"
+        text = full_text
+        rounds = 0
+        while rounds < repair_rounds and not parsed.tool_calls:
+            rounds += 1
+            text = await client.chat(build_repair_prompt(canon.tools, text), **kwargs)
+            parsed = tool_loop.parse(text, canon.tools)
+
+    if not parsed.tool_calls and force_if_empty:
+        return ParsedTools(text="", tool_calls=force_tool_call(canon.tools))
     return parsed

@@ -11,10 +11,7 @@ def build_tool_preamble(
     *,
     has_tool_results: bool = False,
 ) -> str:
-    """Ephemeral tool instructions from the *current request only* (zero registry).
-
-    Strategies inspired by cramt fenced / shell-routing research.
-    """
+    """Ephemeral tool instructions from the *current request only* (zero registry)."""
     if not tools and not has_tool_results:
         return ""
     strategies = strategies or ["fenced", "shell_route"]
@@ -23,66 +20,53 @@ def build_tool_preamble(
     if has_tool_results:
         lines.extend(
             [
-                "Tool results for a previous tool call are included below as "
-                "[tool_result ...] blocks.",
-                "Use those results to answer the user NOW.",
-                "Do NOT re-call the same tool unless the result is clearly insufficient.",
-                "Prefer a normal natural-language final answer (no tool fences) when results are enough.",
+                "Tool results are in [tool_result ...] blocks below. Answer the user now.",
+                "Do not re-call the same tool unless results are insufficient.",
                 "",
             ]
         )
 
-    if tools:
-        lines.append("You may call tools. Tools available for THIS turn only:")
-        for t in tools:
-            schema = json.dumps(t.parameters or {}, ensure_ascii=False)
-            lines.append(f"- {t.name}: {t.description or '(no description)'}")
-            lines.append(f"  parameters_schema: {schema}")
-        lines.append("")
-        if "fenced" in strategies:
-            lines.append(
-                "When calling a tool, output ONLY a fenced block — no prose before or after. "
-                "The info-string is the exact tool name; the body is a single JSON object of arguments. "
-                "Example:\n"
-                "```tool_name\n"
-                '{"arg": "value"}\n'
-                "```\n"
-                "Do not write sentences like \"I need to use the tool\" or \"Clarifying tool usage\". "
-                "Either call the tool with a fence, or answer the user in plain language."
-            )
-        if "shell_route" in strategies:
-            shellish = [
-                t.name
-                for t in tools
-                if any(k in t.name.lower() for k in ("bash", "shell", "run", "exec", "cmd"))
-            ]
-            if shellish:
-                lines.append(
-                    f"Preferred shell tools: {', '.join(shellish)}. "
-                    "For those, you may use ```bash with the command as body; "
-                    'arguments should use key "command".'
-                )
-        if "json" in strategies:
-            lines.append(
-                'Alternatively emit a single JSON line: '
-                '{"tool_calls":[{"name":"...","arguments":{...}}]}'
-            )
-        lines.append(
-            "CRITICAL protocol rules:\n"
-            "1) Tool names above are the ONLY tools that exist this turn. "
-            "Never invent skills like docx/pdfs/slides/spreadsheets or claim a tool is missing "
-            "if it is listed above.\n"
-            "2) If the user asks to use a tool / read a skill / run a command, you MUST emit a tool call "
-            "in one of the formats above. Do not narrate tool usage in prose.\n"
-            "3) If no tool is needed, answer normally without tool fences."
-        )
-        # always advertise JSON form as fallback (reasoning models ignore fences)
-        if "json" not in strategies:
-            lines.append(
-                'Fallback format if fences fail: '
-                '{"tool_calls":[{"name":"EXACT_TOOL_NAME","arguments":{...}}]}'
-            )
+    if not tools:
+        return "\n".join(lines)
 
+    # Compact: reasoning models treat long preambles as analysis targets
+    lines.append("TOOLS (this turn only). To act, emit ONE fence then stop.")
+    for t in tools:
+        schema = json.dumps(t.parameters or {}, ensure_ascii=False, separators=(",", ":"))
+        desc = (t.description or "").strip().replace("\n", " ")[:160]
+        lines.append(f"- {t.name}: {desc}")
+        lines.append(f"  schema:{schema}")
+
+    primary = tools[0].name
+    lines.append("")
+    lines.append(
+        "FORMAT (mandatory — no prose before/after):\n"
+        f"```{primary}\n"
+        "{}\n"
+        "```\n"
+        "Rules:\n"
+        "- info-string = exact tool name; body = JSON object of args (may be {}).\n"
+        "- Never say you cannot call a tool that is listed.\n"
+        "- Never write Clarifying/Thinking/Analysis sections.\n"
+        "- No Hide! / no meta commentary."
+    )
+    if "json" in strategies or True:
+        lines.append(
+            'Alt: {"tool_calls":[{"name":"'
+            + primary
+            + '","arguments":{}}]}'
+        )
+    if "shell_route" in strategies:
+        shellish = [
+            t.name
+            for t in tools
+            if any(k in t.name.lower() for k in ("bash", "shell", "run", "exec", "cmd"))
+        ]
+        if shellish:
+            lines.append(
+                f"Shell tools ({', '.join(shellish)}): ```bash body = command; "
+                'or JSON key "command".'
+            )
     return "\n".join(lines)
 
 

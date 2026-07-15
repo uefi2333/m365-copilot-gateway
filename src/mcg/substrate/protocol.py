@@ -99,6 +99,30 @@ def stop_frame() -> str:
     )
 
 
+def metrics_frame() -> str:
+    """Mandatory Metrics frame — must ride in the same WS send as chat (cramt §4)."""
+    return (
+        json.dumps(
+            {
+                "arguments": [
+                    {
+                        "Timestamps": {
+                            "ConnectionStart": "",
+                            "UserInputStart": "",
+                            "ConnectionEstablished": "",
+                            "UserInputSubmit": "",
+                        }
+                    }
+                ],
+                "target": "Metrics",
+                "type": 1,
+            },
+            ensure_ascii=False,
+        )
+        + SIGNALR_SEP
+    )
+
+
 def build_hub_url(
     *,
     oid: str,
@@ -137,6 +161,7 @@ def build_chat_invoke(
     plugins: list[dict[str, Any]] | None = None,
     message_history: list[dict[str, Any]] | None = None,
     message_extras: dict[str, Any] | None = None,
+    agent_id: str | None = None,
 ) -> str:
     message: dict[str, Any] = {
         "author": "user",
@@ -180,7 +205,6 @@ def build_chat_invoke(
                     "deviceType": "Desktop",
                 },
                 "message": message,
-                "plugins": plugins or [{"Id": "BingWebSearch", "Source": "BuiltIn"}],
                 "isSbsSupported": True,
                 "tone": tone,
                 "renderReferencesBehindEOS": True,
@@ -190,6 +214,25 @@ def build_chat_invoke(
         "target": "chat",
         "type": 4,
     }
+    arg0 = payload["arguments"][0]
+    # Agent path (Copilot Studio declarative agent) — exclusive with plugins
+    # per cramt: threadLevelGptId + gpts instead of BuiltIn plugins.
+    if agent_id:
+        arg0["threadLevelGptId"] = {"id": agent_id, "source": "MOS3"}
+        arg0["gpts"] = [
+            {
+                "id": agent_id,
+                "source": "MOS3",
+                "version": "1.0.0",
+                "clientOverrides": {
+                    "capabilities": [],
+                    "deepResearchModels@odata.type": "Collection(String)",
+                },
+            }
+        ]
+        arg0["plugins"] = []
+    else:
+        arg0["plugins"] = plugins or [{"Id": "BingWebSearch", "Source": "BuiltIn"}]
     if message_history:
-        payload["arguments"][0]["messageHistory"] = message_history
+        arg0["messageHistory"] = message_history
     return json.dumps(payload, ensure_ascii=False) + SIGNALR_SEP

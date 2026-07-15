@@ -13,7 +13,7 @@ from mcg.compat.anthropic_messages import (
     final_anthropic_response,
     to_canonical,
 )
-from mcg.models_catalog import resolve_tone
+from mcg.models_catalog import resolve_tone, tone_for_tools
 from mcg.multimodal.adapter import extract_from_content, render_multimodal_prompt, substrate_message_extras
 from mcg.substrate.client import SubstrateClient, SubstrateError
 
@@ -83,7 +83,7 @@ async def anthropic_messages(
                     canon.extra["multimodal_parts"] = bundle_parts
                     break
 
-    tone = resolve_tone(canon.model, models)
+    tone = tone_for_tools(resolve_tone(canon.model, models), has_tools=bool(canon.tools))
     prompt = tool_loop.augment_prompt(canon)
     mm_parts = canon.extra.get("multimodal_parts") or []
     msg_extras = substrate_message_extras(mm_parts) if mm_parts else None

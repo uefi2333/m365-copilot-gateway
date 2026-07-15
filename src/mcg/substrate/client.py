@@ -16,6 +16,7 @@ from .protocol import (
     build_chat_invoke,
     build_hub_url,
     handshake_frame,
+    metrics_frame,
 )
 
 
@@ -72,6 +73,7 @@ class SubstrateClient:
         is_start_of_session: bool = True,
         message_history: list[dict[str, Any]] | None = None,
         message_extras: dict[str, Any] | None = None,
+        agent_id: str | None = None,
     ) -> AsyncIterator[str]:
         conv = conversation_id or str(uuid.uuid4())
         sess = session_id or str(uuid.uuid4())
@@ -103,8 +105,10 @@ class SubstrateClient:
                     time_zone=self.time_zone,
                     message_history=message_history,
                     message_extras=message_extras,
+                    agent_id=agent_id,
                 )
-                await ws.send(invoke)
+                # cramt §4: Metrics must share the same WS send as chat
+                await ws.send(invoke + metrics_frame())
                 async for chunk in self._read_stream(ws):
                     yield chunk
         except SubstrateError:
@@ -154,6 +158,11 @@ class SubstrateClient:
                                     continue
                                 if entry.get("author") == "user":
                                     continue
+                                # Control frames (Disengaged, Progress, …) must not become content
+                                if entry.get("messageType"):
+                                    if entry.get("messageType") == "Disengaged":
+                                        raise SubstrateError("disengaged")
+                                    continue
                                 text = entry.get("text")
                                 if isinstance(text, str) and text:
                                     answer, emit = fold_stream_text(answer, text)
@@ -162,17 +171,21 @@ class SubstrateClient:
                                     break
                 if t == 2:
                     # Completion payload — fold final text then end immediately.
-                    # Waiting for type 3 adds multi-second "last char freeze" for clients.
                     item = msg.get("item") or {}
                     item_msgs = item.get("messages") or []
                     for entry in reversed(item_msgs):
-                        if isinstance(entry, dict) and entry.get("author") != "user":
-                            text = entry.get("text")
-                            if isinstance(text, str) and text:
-                                answer, emit = fold_stream_text(answer, text)
-                                if emit:
-                                    yield emit
-                            break
+                        if not isinstance(entry, dict) or entry.get("author") == "user":
+                            continue
+                        if entry.get("messageType"):
+                            if entry.get("messageType") == "Disengaged":
+                                raise SubstrateError("disengaged")
+                            continue
+                        text = entry.get("text")
+                        if isinstance(text, str) and text:
+                            answer, emit = fold_stream_text(answer, text)
+                            if emit:
+                                yield emit
+                        break
                     return
                 if t == 3:
                     return

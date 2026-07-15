@@ -74,6 +74,7 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     app.state.local_runner = local_runner
     app.state.sessions = SessionStore()
     app.state.request_log = []  # ring buffer of recent requests
+    app.state.studio_agent = None  # filled lazily / optional
 
     keepalive = TokenKeepAlive(
         fabric,
