@@ -249,9 +249,7 @@ async def stream_openai_chunks(
 
     usage_out = {}
     if usage is not None:
-        # content_len is characters; estimate_tokens needs the text itself,
-        # so approximate from char count with the same CJK-aware bias.
-        est = max(1, content_len // 3)  # slightly denser than //4
+        est = max(1, content_len // 3)
         usage["completion_tokens"] = est
         usage["total_tokens"] = usage.get("prompt_tokens", 0) + est
         usage_out = dict(usage)
@@ -266,7 +264,9 @@ async def stream_openai_chunks(
     if tools:
         for frag in _openai_tool_call_deltas(tools):
             yield _make({"tool_calls": [frag]})
-        yield _make({}, finish="tool_calls", extra=finish_extra if finish_extra else None)
+        # yield early finish block without blocking on slow math/dictionary merges
+        yield _make({}, finish="tool_calls")
     else:
-        yield _make({}, finish="stop", extra=finish_extra if finish_extra else None)
+        yield _make({}, finish="stop")
     yield "data: [DONE]\n\n"
+
