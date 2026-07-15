@@ -21,15 +21,14 @@ substrate:
 
 token:
   refresh_skew_sec: 300
-  # Lightweight default: paste JWT + optional OAuth refresh_token (HTTP only).
-  # CDP/Chrome is OFF unless you set prefer_cdp: true
   prefer_cdp: false
-  cdp_port: 9222
-  cdp_timeout_sec: 120
-  browser_binary: null
-  headless: false
-  # Entra app for silent refresh / device-code (no local Chrome required)
-  # EXPERIMENTAL — see docs/TOKEN_CDP.md; paste JWT is the reliable path
+  # Mature: Office web Copilot client + Sydney scopes (cramt/lezi)
+  use_sydney_msal: true
+  msal_client_id: "c0ab8ce9-e9a0-42e7-b064-33d422df41f1"
+  msal_authority: "https://login.microsoftonline.com/common"
+  msal_redirect_uri: "https://login.microsoftonline.com/common/oauth2/nativeclient"
+  msal_scopes: "https://substrate.office.com/sydney/M365Chat.Read https://substrate.office.com/sydney/sydney.readwrite"
+  # Legacy custom Entra OAuth — leave null
   oauth_client_id: null
   oauth_tenant: "common"
   oauth_scope: "https://substrate.office.com/ows/.default offline_access openid profile"

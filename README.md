@@ -94,11 +94,18 @@ Tools are taken **only from the inbound request** — no server-side tool regist
 
 Tool execution: **client-executed by default** (gateway emits `tool_calls`; client runs tools and posts results). Optional local executors are off by default.
 
-## Account pool & import
+## Auth (mature — cramt/lezi)
 
-1. **Paste JWT (reliable)** — `mcg import-token -` (`aud` starts with `https://substrate.office.com`)
-2. **Optional CDP** — `prefer_cdp: true` only if you have Chrome
-3. **OAuth device-code / refresh_token** — **experimental / not guaranteed** for ChatHub substrate tokens (see [docs/TOKEN_CDP.md](docs/TOKEN_CDP.md) live probes)
+```bash
+pip install -e ".[auth]"   # msal
+mcg login --label alice    # print PKCE URL
+mcg login --id KEY --finish "…/oauth2/nativeclient?code=…"
+mcg refresh-token ACCOUNT  # silent MSAL / sidecar RT
+# fallback
+echo "$JWT" | mcg import-token - --label alice
+```
+
+See [docs/TOKEN_CDP.md](docs/TOKEN_CDP.md).
 
 
 ## Security

@@ -21,9 +21,14 @@ class TokenStatus:
 
 
 class TokenFabric:
-    """Token resolution without Chrome by default.
+    """Token resolution — mature default = Sydney MSAL (cramt/lezi).
 
-    L0 memory → L1 disk JWT → L1.5 OAuth refresh_token (HTTP) → L2 CDP optional → L3 paste/device-code
+    Order in ensure():
+      L0 memory/disk JWT
+      L1 Sydney MSAL silent + sidecar RT  (default)
+      L1.5 legacy oauth refresh_token     (optional)
+      L2 CDP                              (optional prefer_cdp)
+      L3 paste / mcg login PKCE
     """
 
     def __init__(
@@ -36,6 +41,11 @@ class TokenFabric:
         cdp_timeout_sec: float = 90.0,
         browser_binary: str | None = None,
         headless: bool = False,
+        use_sydney_msal: bool = True,
+        msal_client_id: str = "c0ab8ce9-e9a0-42e7-b064-33d422df41f1",
+        msal_authority: str = "https://login.microsoftonline.com/common",
+        msal_redirect_uri: str = "https://login.microsoftonline.com/common/oauth2/nativeclient",
+        msal_scopes: str = "",
         oauth_client_id: str | None = None,
         oauth_tenant: str = "common",
         oauth_scope: str = "https://substrate.office.com/ows/.default offline_access openid profile",
@@ -49,6 +59,11 @@ class TokenFabric:
         self.cdp_timeout_sec = cdp_timeout_sec
         self.browser_binary = browser_binary
         self.headless = headless
+        self.use_sydney_msal = use_sydney_msal
+        self.msal_client_id = msal_client_id
+        self.msal_authority = msal_authority
+        self.msal_redirect_uri = msal_redirect_uri
+        self.msal_scopes = [s for s in (msal_scopes or "").split() if s]
         self.oauth_client_id = oauth_client_id
         self.oauth_tenant = oauth_tenant
         self.oauth_scope = oauth_scope
@@ -92,6 +107,18 @@ class TokenFabric:
 
     def get_refresh_token(self, account_id: str) -> str | None:
         return self._refresh_tokens.get(account_id)
+
+    def _sydney(self, account_key: str = "default"):
+        from .sydney_msal import SydneyMsal
+
+        return SydneyMsal(
+            self.data_dir,
+            client_id=self.msal_client_id,
+            authority=self.msal_authority,
+            redirect_uri=self.msal_redirect_uri,
+            scopes=self.msal_scopes or None,
+            account_key=account_key,
+        )
 
     def validate(self, token: str) -> TokenStatus:
         try:
@@ -140,6 +167,42 @@ class TokenFabric:
             self._refresh_locks[account_id] = asyncio.Lock()
         return self._refresh_locks[account_id]
 
+    async def refresh_via_sydney_msal(
+        self,
+        account_id: str,
+        *,
+        on_status: Callable[[str], None] | None = None,
+    ) -> TokenStatus:
+        """MSAL silent + sidecar RT (mature path)."""
+        if not self.use_sydney_msal:
+            return TokenStatus(False, "L1-msal", 0, "use_sydney_msal=false")
+
+        def _run() -> TokenStatus:
+            from .sydney_msal import SydneyAuthError
+
+            sm = self._sydney(account_key=account_id)
+            try:
+                if on_status:
+                    on_status("Sydney MSAL silent…")
+                b = sm.acquire_silent()
+                if not b:
+                    if on_status:
+                        on_status("Sydney sidecar refresh_token…")
+                    b = sm.refresh_with_sidecar_rt()
+                if not b:
+                    return TokenStatus(False, "L1-msal", 0, "no MSAL cache / sidecar RT")
+            except SydneyAuthError as exc:
+                return TokenStatus(False, "L1-msal", 0, str(exc))
+            st = self.put_hot(account_id, b.access_token)
+            if not st.valid:
+                return TokenStatus(False, "L1-msal", 0, st.error or "aud check failed")
+            if b.refresh_token:
+                self.put_refresh_token(account_id, b.refresh_token)
+            st.source = f"L1-msal:{b.source}"
+            return st
+
+        return await asyncio.to_thread(_run)
+
     async def refresh_via_oauth(
         self,
         account_id: str,
@@ -147,21 +210,16 @@ class TokenFabric:
         refresh_token: str | None = None,
         on_status: Callable[[str], None] | None = None,
     ) -> TokenStatus:
-        """HTTP-only silent renew using stored/offline refresh_token."""
+        """Legacy custom oauth_client_id path (usually wrong for ChatHub)."""
         from .oauth import OAuthError, refresh_with_refresh_token
 
         rt = refresh_token or self.get_refresh_token(account_id)
         if not rt:
             return TokenStatus(False, "L1.5-oauth", 0, "no refresh_token stored")
         if not self.oauth_client_id:
-            return TokenStatus(
-                False,
-                "L1.5-oauth",
-                0,
-                "token.oauth_client_id not set (required for refresh_token grant)",
-            )
+            return TokenStatus(False, "L1.5-oauth", 0, "token.oauth_client_id not set")
         if on_status:
-            on_status("refreshing access_token via OAuth refresh_token (HTTP)…")
+            on_status("legacy OAuth refresh_token…")
         try:
             toks = await refresh_with_refresh_token(
                 refresh_token=rt,
@@ -174,30 +232,86 @@ class TokenFabric:
             return TokenStatus(False, "L1.5-oauth", 0, str(exc))
         st = self.put_hot(account_id, toks.access_token)
         if not st.valid:
-            # access token may not be substrate aud if scope wrong
-            return TokenStatus(
-                False,
-                "L1.5-oauth",
-                0,
-                st.error
-                or "refreshed token failed substrate aud check — fix oauth_scope / client",
-            )
+            return TokenStatus(False, "L1.5-oauth", 0, st.error or "aud check failed")
         if toks.refresh_token:
             self.put_refresh_token(account_id, toks.refresh_token)
         st.source = "L1.5-oauth"
         return st
+
+    async def login_pkce_start(self, account_key: str = "default") -> dict[str, str]:
+        sm = self._sydney(account_key=account_key)
+        start = await asyncio.to_thread(sm.start_pkce)
+        return {
+            "auth_url": start.auth_url,
+            "state": start.state,
+            "client_id": start.client_id,
+            "redirect_uri": start.redirect_uri,
+            "hint": (
+                "Open auth_url, sign in, copy the navigation URL containing "
+                "oauth2/nativeclient?code=… (page may show wrongplace — still copy that URL)"
+            ),
+        }
+
+    async def login_pkce_finish(
+        self,
+        code_or_url: str,
+        account_id: str,
+        *,
+        account_key: str | None = None,
+    ) -> TokenStatus:
+        key = account_key or account_id
+
+        def _run() -> TokenStatus:
+            from .sydney_msal import SydneyAuthError
+
+            sm = self._sydney(account_key=key)
+            try:
+                b = sm.exchange_code(code_or_url)
+            except SydneyAuthError as exc:
+                return TokenStatus(False, "pkce", 0, str(exc))
+            st = self.put_hot(account_id, b.access_token)
+            if b.refresh_token:
+                self.put_refresh_token(account_id, b.refresh_token)
+            if st.valid:
+                st.source = "pkce"
+            else:
+                st = TokenStatus(False, "pkce", 0, st.error or "aud not substrate")
+            return st
+
+        return await asyncio.to_thread(_run)
 
     async def login_device_code(
         self,
         account_id: str,
         *,
         on_status: Callable[[str], None] | None = None,
+        use_sydney: bool = True,
     ) -> TokenStatus:
-        """Device code: user opens microsoft.com/devicelogin on any device; no Chrome here."""
+        if use_sydney and self.use_sydney_msal:
+
+            def _run() -> TokenStatus:
+                from .sydney_msal import SydneyAuthError
+
+                sm = self._sydney(account_key=account_id)
+                try:
+                    b = sm.acquire_device_code(on_status=on_status)
+                except SydneyAuthError as exc:
+                    return TokenStatus(False, "device-code", 0, str(exc))
+                st = self.put_hot(account_id, b.access_token)
+                if b.refresh_token:
+                    self.put_refresh_token(account_id, b.refresh_token)
+                if st.valid:
+                    st.source = "device-code-sydney"
+                else:
+                    st = TokenStatus(False, "device-code", 0, st.error or "aud check failed")
+                return st
+
+            return await asyncio.to_thread(_run)
+
         from .oauth import OAuthError, device_code_login
 
         if not self.oauth_client_id:
-            return TokenStatus(False, "device-code", 0, "token.oauth_client_id not set")
+            return TokenStatus(False, "device-code", 0, "oauth_client_id not set")
         try:
             toks = await device_code_login(
                 client_id=self.oauth_client_id,
@@ -214,13 +328,7 @@ class TokenFabric:
         if st.valid:
             st.source = "device-code"
         else:
-            st = TokenStatus(
-                False,
-                "device-code",
-                0,
-                st.error
-                or "token aud is not substrate — app registration/API permissions must include substrate scope",
-            )
+            st = TokenStatus(False, "device-code", 0, st.error or "aud check failed")
         return st
 
     async def capture_via_cdp(
@@ -232,7 +340,6 @@ class TokenFabric:
         on_status: Callable[[str], None] | None = None,
         profile_path: str | None = None,
     ) -> TokenStatus:
-        """Optional heavy path — only if prefer_cdp / explicit CLI."""
         from .cdp import capture_substrate_token
 
         profile = Path(profile_path) if profile_path else self.profile_dir_for(account_id)
@@ -272,8 +379,14 @@ class TokenFabric:
                     if tok != self._hot.get(account_id):
                         self.put_hot(account_id, tok)
                     return tok
-                # near expiry: try OAuth first (no browser)
-                if allow_oauth and (not st.valid or st.seconds_remaining <= self.refresh_skew_sec):
+                # near expiry / expired: mature MSAL first
+                if allow_oauth and self.use_sydney_msal:
+                    ost = await self.refresh_via_sydney_msal(account_id, on_status=on_status)
+                    if ost.valid:
+                        tok2 = self.get_hot(account_id)
+                        if tok2:
+                            return tok2
+                if allow_oauth and self.oauth_client_id:
                     ost = await self.refresh_via_oauth(account_id, on_status=on_status)
                     if ost.valid:
                         tok2 = self.get_hot(account_id)
@@ -281,12 +394,19 @@ class TokenFabric:
                             return tok2
                 if st.valid and not use_cdp:
                     return tok
-            elif allow_oauth:
-                ost = await self.refresh_via_oauth(account_id, on_status=on_status)
-                if ost.valid:
-                    tok2 = self.get_hot(account_id)
-                    if tok2:
-                        return tok2
+            else:
+                if allow_oauth and self.use_sydney_msal:
+                    ost = await self.refresh_via_sydney_msal(account_id, on_status=on_status)
+                    if ost.valid:
+                        tok2 = self.get_hot(account_id)
+                        if tok2:
+                            return tok2
+                if allow_oauth and self.oauth_client_id:
+                    ost = await self.refresh_via_oauth(account_id, on_status=on_status)
+                    if ost.valid:
+                        tok2 = self.get_hot(account_id)
+                        if tok2:
+                            return tok2
 
             if use_cdp:
                 st = await self.capture_via_cdp(
@@ -305,19 +425,25 @@ class TokenFabric:
                     return fallback_token
             raise RuntimeError(
                 f"no valid substrate token for account {account_id}; "
-                "import JWT, or store refresh_token + oauth_client_id, "
-                "or run: mcg device-login / mcg import-token"
+                "run: mcg login  (PKCE, mature) | mcg import-token - | "
+                "or enable prefer_cdp / browser-login"
             )
 
     def status_dict(self, account_id: str, token: str | None = None) -> dict[str, Any]:
         tok = token or self.get_hot(account_id)
+        msal_cache = self.data_dir / "msal" / f"{account_id}.json"
+        msal_rt = self.data_dir / "msal" / f"{account_id}.rt.json"
+        base = {
+            "has_refresh_token": bool(self.get_refresh_token(account_id)),
+            "msal_cache": msal_cache.exists(),
+            "msal_sidecar_rt": msal_rt.exists(),
+            "use_sydney_msal": self.use_sydney_msal,
+            "msal_client_id": self.msal_client_id,
+            "oauth_configured": bool(self.oauth_client_id),
+            "prefer_cdp": self.prefer_cdp,
+        }
         if not tok:
-            return {
-                "valid": False,
-                "source": "none",
-                "seconds_remaining": 0,
-                "has_refresh_token": bool(self.get_refresh_token(account_id)),
-            }
+            return {"valid": False, "source": "none", "seconds_remaining": 0, **base}
         st = self.validate(tok)
         return {
             "valid": st.valid,
@@ -328,7 +454,5 @@ class TokenFabric:
             "tid": st.tid,
             "checked_at": int(time.time()),
             "needs_refresh": st.valid and st.seconds_remaining <= self.refresh_skew_sec,
-            "has_refresh_token": bool(self.get_refresh_token(account_id)),
-            "oauth_configured": bool(self.oauth_client_id),
-            "prefer_cdp": self.prefer_cdp,
+            **base,
         }

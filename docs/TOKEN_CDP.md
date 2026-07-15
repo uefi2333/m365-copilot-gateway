@@ -1,45 +1,58 @@
-# Token acquisition — what actually works
+# Token acquisition — mature path (cramt / lezi aligned)
 
-## Live probe results (2026-07-15, this repo)
+## What production reverse-proxies actually use
 
-We hit `login.microsoftonline.com` from CI/sandbox **without completing interactive MFA**.
+| Rank | Method | Repo | Auto renew |
+|------|--------|------|------------|
+| 1 | **MSAL silent** after PKCE / Playwright login | cramt/m365-copilot-proxy | Yes (msal-cache) |
+| 2 | **PKCE auth-code** (paste `nativeclient?code=`) | lezi gettoken.py | Seeds cache |
+| 3 | **Browser paste** ChatHub `access_token` | lezi / everyone | No (~1h) |
+| 4 | CDP sniff WS | optional | Session-dependent |
+| ✗ | Custom Entra + `ows/.default` device code | — | Does not yield ChatHub JWT |
 
-| Step | Result |
-|------|--------|
-| Device code **START** with random/custom `client_id` | **Fail** `unauthorized_client` |
-| Device code START with first-party ids (Office `d3590ed6-…`, Azure CLI, …) + substrate-like scope | **HTTP 200** + `user_code` |
-| Device code **POLL** without user finishing `login.microsoft.com/device` | Always `authorization_pending` — **no AT/RT** |
-| `grant_type=refresh_token` with fake RT | `invalid_grant` |
-| Full user complete → AT with `aud=https://substrate.office.com/...` accepted by ChatHub | **Not proven here** (needs real MFA + Bizchat accept). Community reverse-proxies almost always use **browser-captured JWT**, not device-code OAuth. |
+## Recipe (verified community, June 2026)
 
-### Hard truths
+```
+client_id:  c0ab8ce9-e9a0-42e7-b064-33d422df41f1
+scopes:     https://substrate.office.com/sydney/M365Chat.Read
+            https://substrate.office.com/sydney/sydney.readwrite
+redirect:   https://login.microsoftonline.com/common/oauth2/nativeclient
+aud:        https://substrate.office.com/sydney
+```
 
-1. **Device code can start** for some Microsoft first-party public clients, but that is **not** the same as “you get a legal long-lived refresh_token that ChatHub accepts.”
-2. **Your own Entra app** cannot simply declare `https://substrate.office.com/ows/.default` the way you do for Graph. Substrate is a first-party resource; third-party apps typically get `invalid_scope` / consent failures.
-3. **First-party client_id reuse** (Office/Azure CLI) for automation is fragile, against Microsoft ToS, and may yield tokens whose `aud`/claims still fail Bizchat/ChatHub.
-4. **What production gateways actually use today**
-   - **L1:** paste / CDP-sniff `access_token` from browser ChatHub WS (TTL ~1h)
-   - **Optional:** keep browser session cookies / CDP re-open to mint a new AT
-   - **Not reliable as default:** pure device-code → refresh_token → silent forever for Substrate Copilot
-
-## Recommended default (honest)
+### CLI
 
 ```bash
-# Still the reliable path
+# 1) Start PKCE
+mcg login --label alice
+# open printed URL, sign in, copy nativeclient?code= URL (wrongplace page is OK)
+
+# 2) Finish
+mcg login --id <account_key> --finish "https://login.microsoftonline.com/common/oauth2/nativeclient?code=..."
+
+# 3) Later renewals (no browser if MSAL/sidecar RT valid)
+mcg refresh-token <account_id>
+
+# Fallback: paste browser JWT
 echo "$JWT" | mcg import-token - --label alice
-# re-paste when TTL low, or use optional CDP on a machine that has a browser
 ```
 
-```yaml
-token:
-  prefer_cdp: false
-  # oauth_* is experimental / only if YOU verified AT aud against ChatHub
-  oauth_client_id: null
-```
+### nativeclient gotcha
 
-## Experimental OAuth (disabled claims)
+Browser often bounces to `/common/wrongplace`. The `?code=` lives on the
+**navigation request** to `.../oauth2/nativeclient?code=...`. Copy that URL
+from DevTools Network or the brief address-bar flash.
 
-`mcg device-login` / `refresh_token` storage remain in the tree for operators who **bring their own working client_id + proven substrate AT**.  
-Gateway will **not** advertise them as “works out of the box.”
+### Device code
 
-See probe script: `scripts/probe_oauth_device.py`.
+Often rejected for this first-party client. Prefer `mcg login`.
+
+### Live probes (2026-07-15)
+
+- Custom client_id + ows scope → unauthorized_client
+- Office client + substrate-like scope → device START may 200 but without MFA no AT/RT
+- Mature path uses **PKCE + Sydney scopes**, not ows device code
+
+## CDP (optional)
+
+Only if `prefer_cdp: true` and Chrome is available. Not required for mature MSAL path.

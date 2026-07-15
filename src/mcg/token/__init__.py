@@ -1,13 +1,14 @@
 from .fabric import TokenFabric
 from .jwtutil import decode_jwt_payload, is_substrate_token, seconds_remaining
-from .oauth import refresh_with_refresh_token, device_code_login, OAuthError
+from .sydney_msal import DEFAULT_CLIENT_ID, SYDNEY_SCOPES, SydneyMsal, SydneyAuthError
 
 __all__ = [
     "TokenFabric",
     "decode_jwt_payload",
     "is_substrate_token",
     "seconds_remaining",
-    "refresh_with_refresh_token",
-    "device_code_login",
-    "OAuthError",
+    "DEFAULT_CLIENT_ID",
+    "SYDNEY_SCOPES",
+    "SydneyMsal",
+    "SydneyAuthError",
 ]

@@ -27,13 +27,23 @@ class SubstrateConfig(BaseModel):
 
 class TokenConfig(BaseModel):
     refresh_skew_sec: int = 300
-    # default OFF — no Chrome required
+    # default OFF — no Chrome required for day-to-day
     prefer_cdp: bool = False
     cdp_port: int = 9222
     cdp_timeout_sec: float = 120.0
     browser_binary: str | None = None
     headless: bool = False
-    # pure HTTP OAuth (refresh_token / device_code)
+    # Mature path: MSAL + Office web Copilot client + Sydney scopes (cramt/lezi)
+    use_sydney_msal: bool = True
+    msal_client_id: str = "c0ab8ce9-e9a0-42e7-b064-33d422df41f1"
+    msal_authority: str = "https://login.microsoftonline.com/common"
+    msal_redirect_uri: str = "https://login.microsoftonline.com/common/oauth2/nativeclient"
+    # space-separated; empty = default Sydney scopes
+    msal_scopes: str = (
+        "https://substrate.office.com/sydney/M365Chat.Read "
+        "https://substrate.office.com/sydney/sydney.readwrite"
+    )
+    # Legacy / experimental custom OAuth (ows etc.) — off by default
     oauth_client_id: str | None = None
     oauth_tenant: str = "common"
     oauth_scope: str = "https://substrate.office.com/ows/.default offline_access openid profile"

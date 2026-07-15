@@ -18,6 +18,11 @@ def _fabric(cfg):
         cdp_timeout_sec=cfg.token.cdp_timeout_sec,
         browser_binary=cfg.token.browser_binary,
         headless=cfg.token.headless,
+        use_sydney_msal=cfg.token.use_sydney_msal,
+        msal_client_id=cfg.token.msal_client_id,
+        msal_authority=cfg.token.msal_authority,
+        msal_redirect_uri=cfg.token.msal_redirect_uri,
+        msal_scopes=cfg.token.msal_scopes,
         oauth_client_id=cfg.token.oauth_client_id,
         oauth_tenant=cfg.token.oauth_tenant,
         oauth_scope=cfg.token.oauth_scope,
@@ -26,7 +31,10 @@ def _fabric(cfg):
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="mcg", description="M365 Copilot Gateway (no Chrome required)")
+    parser = argparse.ArgumentParser(
+        prog="mcg",
+        description="M365 Copilot Gateway — Sydney MSAL auth (cramt/lezi mature path)",
+    )
     parser.add_argument("-c", "--config", default="config.yaml", help="config path")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -34,25 +42,37 @@ def main(argv: list[str] | None = None) -> None:
     p_serve.add_argument("--host", default=None)
     p_serve.add_argument("--port", type=int, default=None)
 
+    p_login = sub.add_parser(
+        "login",
+        help="mature PKCE login (Office web client + Sydney scopes) — print URL, then finish",
+    )
+    p_login.add_argument("--label", default="")
+    p_login.add_argument("--id", dest="account_id", default=None)
+    p_login.add_argument(
+        "--finish",
+        default=None,
+        help="paste redirect URL or code=… to complete exchange",
+    )
+
     p_imp = sub.add_parser("import-token", help="import substrate access JWT (paste / file)")
     p_imp.add_argument("token_file", help="file containing JWT (or - for stdin)")
     p_imp.add_argument("--label", default="")
-    p_imp.add_argument("--refresh-token", default=None, help="optional OAuth refresh_token for silent renew")
+    p_imp.add_argument("--refresh-token", default=None, help="optional refresh_token")
 
-    p_rt = sub.add_parser("set-refresh-token", help="store refresh_token for an account (HTTP renew)")
+    p_rt = sub.add_parser("set-refresh-token", help="store legacy refresh_token for account")
     p_rt.add_argument("account_id")
     p_rt.add_argument("refresh_file", help="file with refresh_token or - for stdin")
 
     p_dev = sub.add_parser(
         "device-login",
-        help="EXPERIMENTAL OAuth device code (may not yield ChatHub-valid substrate JWT)",
+        help="device code with Sydney client (often rejected; prefer mcg login)",
     )
     p_dev.add_argument("--label", default="")
     p_dev.add_argument("--id", dest="account_id", default=None)
 
     p_blogin = sub.add_parser(
         "browser-login",
-        help="OPTIONAL heavy: CDP Chrome/Edge capture (needs browser binary)",
+        help="OPTIONAL: CDP Chrome capture of ChatHub JWT",
     )
     p_blogin.add_argument("--label", default="")
     p_blogin.add_argument("--id", dest="account_id", default=None)
@@ -61,9 +81,12 @@ def main(argv: list[str] | None = None) -> None:
     p_blogin.add_argument("--timeout", type=float, default=None)
     p_blogin.add_argument("--headless", action="store_true")
 
-    p_refresh = sub.add_parser("refresh-token", help="renew access token (OAuth first, CDP only if enabled)")
+    p_refresh = sub.add_parser(
+        "refresh-token",
+        help="renew access token (Sydney MSAL silent first)",
+    )
     p_refresh.add_argument("account_id")
-    p_refresh.add_argument("--cdp", default=None, help="force CDP attach URL")
+    p_refresh.add_argument("--cdp", default=None)
     p_refresh.add_argument("--timeout", type=float, default=None)
 
     sub.add_parser("accounts", help="list accounts")
@@ -90,6 +113,66 @@ def main(argv: list[str] | None = None) -> None:
 
     fabric = _fabric(cfg)
     pool = AccountPool(data_dir, fabric, strategy=cfg.pool.strategy)
+
+    if args.cmd == "login":
+        account_id = args.account_id or f"pending-{uuid.uuid4().hex[:10]}"
+        if not args.finish:
+            info = asyncio.run(fabric.login_pkce_start(account_key=account_id))
+            print("=== M365 Sydney PKCE (mature path) ===")
+            print(f"client_id: {info['client_id']}")
+            print(f"account_key: {account_id}")
+            print()
+            print("1) Open this URL in a browser and sign in:")
+            print(info["auth_url"])
+            print()
+            print("2) After login, copy the URL that contains oauth2/nativeclient?code=...")
+            print("   (browser may land on /common/wrongplace — grab the nativeclient URL from")
+            print("    address bar or DevTools Network → request URL)")
+            print()
+            print("3) Finish:")
+            print(f'   mcg login --id {account_id} --finish "PASTE_URL_HERE" --label "{args.label or "me"}"')
+            return
+
+        st = asyncio.run(
+            fabric.login_pkce_finish(args.finish, account_id=account_id, account_key=account_id)
+        )
+        if not st.valid:
+            print(f"FAILED: {st.error}", file=sys.stderr)
+            sys.exit(1)
+        token = fabric.get_hot(account_id)
+        assert token
+        from mcg.token.jwtutil import decode_jwt_payload
+
+        claims = decode_jwt_payload(token)
+        real_id = str(claims.get("oid") or account_id)
+        label = args.label or f"user-{real_id[:8]}"
+        # re-key hot token under oid if different
+        if real_id != account_id:
+            fabric.put_hot(real_id, token)
+            if fabric.get_refresh_token(account_id):
+                fabric.put_refresh_token(real_id, fabric.get_refresh_token(account_id) or "")
+        acc = pool.import_token(token, label=label)
+        # copy msal cache to oid key if needed
+        src = data_dir / "msal" / f"{account_id}.json"
+        dst = data_dir / "msal" / f"{acc.id}.json"
+        if src.exists() and src != dst:
+            try:
+                if not dst.exists():
+                    dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+                for suf in (".rt.json",):
+                    s2 = src.with_suffix(suf) if suf.startswith(".") else Path(str(src) + suf)
+                    # account_id.json.rt.json pattern
+                srt = data_dir / "msal" / f"{account_id}.rt.json"
+                drt = data_dir / "msal" / f"{acc.id}.rt.json"
+                if srt.exists() and not drt.exists():
+                    drt.write_text(srt.read_text(encoding="utf-8"), encoding="utf-8")
+            except OSError:
+                pass
+        print(
+            f"OK account={acc.id} label={acc.label} ttl={st.seconds_remaining}s "
+            f"source={st.source} aud={claims.get('aud')}"
+        )
+        return
 
     if args.cmd == "import-token":
         if args.token_file == "-":
@@ -121,47 +204,30 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.cmd == "device-login":
         print(
-            "WARNING: device-login is EXPERIMENTAL.\n"
-            "Probes: device_code START may work for some first-party client_ids;\n"
-            "without user MFA you get no AT/RT; ChatHub-valid RT→AT is NOT guaranteed.\n"
-            "Reliable path: mcg import-token (paste browser JWT). See docs/TOKEN_CDP.md",
+            "NOTE: device-code often fails for Office web client. Prefer: mcg login\n",
             file=sys.stderr,
         )
-        if not fabric.oauth_client_id:
-            print("FAILED: set token.oauth_client_id (custom apps usually cannot get substrate).", file=sys.stderr)
-            sys.exit(2)
         account_id = args.account_id or f"pending-{uuid.uuid4().hex[:10]}"
 
         def on_status(msg: str) -> None:
-            print(f"[oauth] {msg}", flush=True)
+            print(f"[device] {msg}", flush=True)
 
-        st = asyncio.run(fabric.login_device_code(account_id, on_status=on_status))
+        st = asyncio.run(fabric.login_device_code(account_id, on_status=on_status, use_sydney=True))
         if not st.valid:
             print(f"FAILED: {st.error}", file=sys.stderr)
-            print(
-                "Hint: set token.oauth_client_id to an Entra app that can mint substrate tokens, "
-                "or just paste a JWT with: mcg import-token -",
-                file=sys.stderr,
-            )
             sys.exit(1)
         token = fabric.get_hot(account_id)
         assert token
         from mcg.token.jwtutil import decode_jwt_payload
 
         claims = decode_jwt_payload(token)
-        real_id = str(claims.get("oid") or account_id)
-        label = args.label or f"user-{real_id[:8]}"
+        label = args.label or f"user-{str(claims.get('oid', account_id))[:8]}"
         acc = pool.import_token(token, label=label)
-        if fabric.get_refresh_token(account_id):
-            fabric.put_refresh_token(acc.id, fabric.get_refresh_token(account_id) or "")
-        print(f"OK account={acc.id} label={acc.label} ttl={st.seconds_remaining}s source={st.source}")
+        print(f"OK account={acc.id} label={acc.label} ttl={st.seconds_remaining}s")
         return
 
     if args.cmd == "browser-login":
-        print(
-            "NOTE: browser-login needs Chrome/Edge. Prefer: mcg import-token / mcg device-login",
-            file=sys.stderr,
-        )
+        print("NOTE: browser-login needs Chrome/Edge. Prefer: mcg login", file=sys.stderr)
         account_id = args.account_id or f"pending-{uuid.uuid4().hex[:10]}"
         if args.port:
             fabric.cdp_port = args.port
@@ -192,16 +258,6 @@ def main(argv: list[str] | None = None) -> None:
         real_id = str(claims.get("oid") or account_id)
         label = args.label or f"user-{real_id[:8]}"
         acc = pool.import_token(token, label=label)
-        profile = fabric.profile_dir_for(real_id)
-        if account_id != real_id:
-            src = fabric.profile_dir_for(account_id)
-            if src.exists() and not profile.exists():
-                try:
-                    src.rename(profile)
-                except OSError:
-                    pass
-            fabric.put_hot(real_id, token)
-        pool.bind_profile(acc.id, str(profile))
         print(f"OK account={acc.id} label={acc.label} ttl={st.seconds_remaining}s source={st.source}")
         return
 
@@ -209,49 +265,49 @@ def main(argv: list[str] | None = None) -> None:
         if args.account_id not in pool.accounts:
             print("unknown account", file=sys.stderr)
             sys.exit(1)
-        acc = pool.accounts[args.account_id]
         if args.timeout:
             fabric.cdp_timeout_sec = args.timeout
 
         def on_status(msg: str) -> None:
             print(f"[refresh] {msg}", flush=True)
 
-        async def run():
-            st = await fabric.refresh_via_oauth(args.account_id, on_status=on_status)
+        async def _go():
+            st = await fabric.refresh_via_sydney_msal(args.account_id, on_status=on_status)
             if st.valid:
                 return st
+            if fabric.oauth_client_id:
+                st = await fabric.refresh_via_oauth(args.account_id, on_status=on_status)
+                if st.valid:
+                    return st
             if args.cdp or fabric.prefer_cdp:
                 return await fabric.capture_via_cdp(
                     args.account_id,
                     cdp_http=args.cdp,
-                    interactive=True,
+                    interactive=False,
                     on_status=on_status,
-                    profile_path=acc.profile_path or None,
                 )
             return st
 
-        st = asyncio.run(run())
+        st = asyncio.run(_go())
         if not st.valid:
             print(f"FAILED: {st.error}", file=sys.stderr)
             sys.exit(1)
-        token = fabric.get_hot(args.account_id)
-        assert token
-        pool.refresh_token(args.account_id, token)
-        print(f"OK refreshed {args.account_id} ttl={st.seconds_remaining}s source={st.source}")
+        print(f"OK ttl={st.seconds_remaining}s source={st.source}")
         return
 
     if args.cmd == "accounts":
-        for a in pool.list_public():
-            rt = "rt" if fabric.get_refresh_token(a["id"]) else "  "
+        for a in pool.list_accounts():
+            st = fabric.status_dict(a.id)
             print(
-                f"{a['id'][:8]}…  {a['label']:<20}  status={a['status']:<10}  "
-                f"ttl={a['token_ttl_sec']}s  valid={a['token_valid']}  {rt}"
+                f"{a.id}\t{a.label}\tenabled={a.enabled}\t"
+                f"valid={st.get('valid')}\tttl={st.get('seconds_remaining')}\t"
+                f"msal={st.get('msal_cache')}\tsource={st.get('source')}"
             )
         return
 
     if args.cmd == "models":
-        for m in list_models():
-            print(f"{m.id:<32} tone={m.tone}")
+        for m in list_models(cfg):
+            print(f"{m['id']}\t{m.get('owned_by','')}\t{m.get('description','')}")
         return
 
 
