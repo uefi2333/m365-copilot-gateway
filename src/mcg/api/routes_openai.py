@@ -29,7 +29,8 @@ from mcg.substrate.client import (
 
 log = logging.getLogger("mcg.openai")
 from mcg.tools.stream_filter import StreamToolAccumulator, iter_filtered_stream
-from mcg.tools.repair import maybe_repair_tool_call, force_tool_call
+from mcg.tools.loop import try_early_tool_calls
+from mcg.tools.repair import maybe_repair_tool_call, force_tool_call, is_plain_chat
 from mcg.tools.platform_adapt import should_short_circuit
 from mcg.tools.sanitize import strip_reasoning_leak
 
@@ -657,7 +658,6 @@ async def chat_completions(
                             raw_stream = client.chat_stream(prompt, **stream_kwargs)
                             if canon.tools:
                                 acc = StreamToolAccumulator(t.name for t in canon.tools)
-                                from mcg.tools.loop import try_early_tool_calls
                                 early_calls = None
                                 async for piece in raw_stream:
                                     acc.feed(piece)
@@ -706,8 +706,7 @@ async def chat_completions(
                     if last_err is not None and not full_buf:
                         # tools: degrade to synthetic tool_call instead of HTML 500
                         if canon.tools:
-                            from mcg.tools.repair import force_tool_call, is_plain_chat
-
+                            
                             user_text = "\n".join(
                                 m.content
                                 for m in canon.messages
@@ -801,8 +800,6 @@ async def chat_completions(
             try:
                 if canon.tools:
                     # Early-exit when tool fence complete (don't wait model epilogue)
-                    from mcg.tools.stream_filter import StreamToolAccumulator
-                    from mcg.tools.loop import try_early_tool_calls
                     acc = StreamToolAccumulator(t.name for t in canon.tools)
                     async for piece in client.chat_stream(prompt, **stream_kwargs):
                         acc.feed(piece)
@@ -838,8 +835,7 @@ async def chat_completions(
         if last_err is not None and not full:
             # tool clients: never hard-fail with 502 if we can synthesize a call
             if canon.tools:
-                from mcg.tools.repair import force_tool_call, is_plain_chat
-
+                
                 user_text = "\n".join(
                     m.content for m in canon.messages if m.role == "user" and m.content
                 )
