@@ -38,7 +38,7 @@
       <div class="stat"><div class="k">账号</div><div class="v">{{ accounts|length }}</div></div>
       <div class="stat"><div class="k">有效令牌</div><div class="v">{{ active }}</div></div>
       <div class="stat"><div class="k">模型</div><div class="v">{{ models|length }}</div></div>
-      <div class="stat"><div class="k">兼容端点</div><div class="v small">/v1/chat/completions</div></div>
+      <div class="stat"><div class="k">模型端点</div><div class="v small">/v1/models</div></div>
     </section>
 
     {% if authed and accounts|length == 0 %}
@@ -47,7 +47,7 @@
       <ol class="steps">
         <li>用下方 PKCE 登录，或粘贴 substrate JWT</li>
         <li>账号池状态变为有效</li>
-        <li>客户端 Base URL：<span class="mono">{{ base_url }}/v1</span>，Key 用 <span class="mono">gateway.api_keys</span></li>
+        <li>模型列表：<span class="mono">{{ base_url }}/v1/models</span>，Key 用 <span class="mono">gateway.api_keys</span></li>
         <li>自检：<span class="mono">curl -s {{ base_url }}/health</span></li>
       </ol>
       <p class="hint">令牌只写本机 data/，不外传。</p>
@@ -56,7 +56,7 @@
 
     {% if authed %}
     <section class="card">
-      <div class="hd"><h2>客户端接入</h2><span class="meta">Open WebUI / Cursor / Claude Code</span></div>
+      <div class="hd"><h2>模型列表接入</h2><span class="meta">OpenAI-compatible models endpoint</span></div>
       <div class="field">
         <label>Base URL</label>
         <div class="copyline">
@@ -68,7 +68,7 @@
         <label>示例</label>
         <div class="code" id="curl-ex">curl {{ base_url }}/v1/models -H "Authorization: Bearer &lt;api_key&gt;"</div>
       </div>
-      <p class="hint">模型填 <span class="mono">m365-copilot</span>，或 GET /v1/models 返回的 id。</p>
+      <p class="hint">当前只保留号池和模型列表；聊天/工具层待 P2+ 重做。</p>
     </section>
     {% endif %}
 

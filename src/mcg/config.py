@@ -65,24 +65,6 @@ class PoolConfig(BaseModel):
     max_consecutive_errors: int = 3
 
 
-class ToolsConfig(BaseModel):
-    max_rounds: int = 8
-    repair_rounds: int = 1
-    execution: Literal["client", "local"] = "client"
-    strategies: list[str] = Field(
-        default_factory=lambda: ["fenced", "shell_route", "json"]
-    )
-    # local runner
-    local_timeout_sec: float = 30.0
-    local_max_output_bytes: int = 32000
-    local_cwd: str | None = None
-    local_shell: bool = True
-    local_allow_names: list[str] = Field(default_factory=list)
-    # Copilot Studio declarative agent (raises tool-call compliance; not native tools)
-    studio_agent_enabled: bool = False
-    studio_agent_cache: str | None = None
-
-
 class ModelEntry(BaseModel):
     id: str
     tone: str
@@ -98,7 +80,6 @@ class AppConfig(BaseModel):
     substrate: SubstrateConfig = Field(default_factory=SubstrateConfig)
     token: TokenConfig = Field(default_factory=TokenConfig)
     pool: PoolConfig = Field(default_factory=PoolConfig)
-    tools: ToolsConfig = Field(default_factory=ToolsConfig)
     models: ModelsConfig = Field(default_factory=ModelsConfig)
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
@@ -119,7 +100,7 @@ def load_config(path: str | Path | None = None) -> AppConfig:
 def save_config(cfg: AppConfig, path: str | Path) -> None:
     """Dump AppConfig back to YAML, preserving section order and comments where possible."""
     raw: dict[str, Any] = {}
-    for section in ("gateway", "substrate", "token", "rate_limit", "pool", "tools", "models"):
+    for section in ("gateway", "substrate", "token", "rate_limit", "pool", "models"):
         val = getattr(cfg, section, None)
         if val is None:
             continue
@@ -130,8 +111,6 @@ def save_config(cfg: AppConfig, path: str | Path) -> None:
         if section == "rate_limit" and d.get("enabled") is False:
             pass  # keep default for visibility
         if section == "pool" and d.get("strategy") == "round_robin":
-            pass
-        if section == "tools" and d.get("execution") == "client":
             pass
         raw[section] = d
     p = Path(path)

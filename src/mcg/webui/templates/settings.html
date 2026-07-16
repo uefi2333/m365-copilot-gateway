@@ -80,31 +80,7 @@
         </div>
       </section>
 
-      <section class="card">
-        <div class="hd"><h2>工具调用</h2><span class="meta">function calling</span></div>
-        <div class="grid-2">
-          <div class="field">
-            <label>执行方式</label>
-            <select name="tools.execution">
-              <option value="client" {% if config.get('tools.execution') == 'client' %}selected{% endif %}>客户端执行（推荐）</option>
-              <option value="local" {% if config.get('tools.execution') == 'local' %}selected{% endif %}>网关本地执行</option>
-            </select>
-            <p class="hint">客户端执行：返回 tool_calls 给 Cursor / Claude Code 等</p>
-          </div>
-          <div class="field">
-            <label>最大工具轮次</label>
-            <input name="tools.max_rounds" value="{{ config.get('tools.max_rounds', 8) }}" />
-            <p class="hint">单次请求内模型↔工具往返上限</p>
-          </div>
-        </div>
-        <div class="grid-2">
-          <div class="field">
-            <label>修复轮次</label>
-            <input name="tools.repair_rounds" value="{{ config.get('tools.repair_rounds', 1) }}" />
-            <p class="hint">工具格式错误时自动纠错重试次数</p>
-          </div>
-        </div>
-      </section>
+      
 
       <section class="card">
         <div class="hd"><h2>网关安全</h2><span class="meta">登录与鉴权</span></div>

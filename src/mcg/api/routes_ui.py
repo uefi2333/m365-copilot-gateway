@@ -59,7 +59,7 @@ async def ui_home(request: Request):
             "active": active,
             "models": request.app.state.models,
             "authed": _authed(request),
-            "logs": list(reversed(request.app.state.request_log[-30:])),
+            "logs": [],
             "msal_client_id": cfg.token.msal_client_id,
             "use_sydney_msal": cfg.token.use_sydney_msal,
             "prefer_cdp": cfg.token.prefer_cdp,
@@ -236,7 +236,6 @@ async def ui_browser_login(request: Request, label: str = Form("")):
 SETTABLE_SECTIONS = {
     "rate_limit": ["enabled", "requests_per_minute", "burst"],
     "pool": ["strategy", "cooldown_sec", "max_consecutive_errors"],
-    "tools": ["max_rounds", "repair_rounds", "execution"],
     "gateway": ["api_keys", "admin_password", "cors_origins"],
 }
 

@@ -52,17 +52,6 @@ rate_limit:
   # burst window allowlist size
   burst: 10
 
-tools:
-  # max model↔tool rounds inside one client request
-  max_rounds: 8
-  repair_rounds: 1
-  # client executes tools (recommended)
-  execution: "client"
-  # inject strategies: fenced | json | shell_route
-  strategies:
-    - fenced
-    - shell_route
-
 models:
   # 公开模型列表：只写官方产品名（/v1/models + WebUI 同源）
   advertise:

@@ -1,23 +1,21 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, Depends
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 
+from mcg.auth.deps import require_api_key
 from mcg.config import AppConfig, load_config
 from mcg.models_catalog import ModelInfo, list_models
 from mcg.pool.store import AccountPool
-from mcg.pool.sessions import SessionStore
 from mcg.token.fabric import TokenFabric
-from mcg.tools.local_exec import LocalToolRunner
-from mcg.tools.loop import ToolLoop
 from mcg.token.keepalive import TokenKeepAlive
 
 from .routes_admin import router as admin_router
-from .routes_anthropic import router as anthropic_router
-from .routes_openai import router as openai_router
 from .routes_ui import router as ui_router
 
 
@@ -51,58 +49,17 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
         cooldown_sec=cfg.pool.cooldown_sec,
         max_consecutive_errors=cfg.pool.max_consecutive_errors,
     )
-    extra_models = [
+    models = list_models([
         ModelInfo(id=m.id, tone=m.tone, label=m.label or m.id) for m in cfg.models.advertise
-    ]
-    models = list_models(extra_models)
-    tool_loop = ToolLoop(strategies=cfg.tools.strategies, max_rounds=cfg.tools.max_rounds)
-    local_runner = LocalToolRunner(
-        enabled=(cfg.tools.execution == "local"),
-        timeout_sec=cfg.tools.local_timeout_sec,
-        max_output_bytes=cfg.tools.local_max_output_bytes,
-        cwd=cfg.tools.local_cwd,
-        shell=cfg.tools.local_shell,
-        allow_names=cfg.tools.local_allow_names or None,
-    )
+    ])
 
-    app = FastAPI(title="M365 Copilot Gateway", version="0.2.0")
+    app = FastAPI(title="M365 Copilot Pool Core", version="0.1.0")
     app.state.config = cfg
-    app.state.config_path = str(config_path) if config_path else (Path("config.yaml").resolve())
+    app.state.config_path = str(config_path) if config_path else str(Path("config.yaml").resolve())
     app.state.fabric = fabric
     app.state.pool = pool
     app.state.models = models
-    app.state.tool_loop = tool_loop
-    app.state.local_runner = local_runner
-    app.state.sessions = SessionStore()
-    app.state.request_log = []  # ring buffer of recent requests
-    app.state.studio_agent = None  # filled lazily / optional
-
-    @app.exception_handler(HTTPException)
-    async def _http_exc_handler(request, exc: HTTPException):
-        """Normalize dict details; keep OpenAI-ish shape for clients."""
-        from fastapi.responses import JSONResponse
-
-        detail = exc.detail
-        if isinstance(detail, dict) and "message" in detail:
-            body = {
-                "error": {
-                    "message": detail.get("message"),
-                    "type": detail.get("type") or "mcg_error",
-                    "code": detail.get("code"),
-                    "param": None,
-                }
-            }
-            if detail.get("hint"):
-                body["error"]["hint"] = detail["hint"]
-            if detail.get("raw"):
-                body["error"]["raw"] = detail["raw"]
-            return JSONResponse(status_code=exc.status_code, content=body)
-        if isinstance(detail, str):
-            return JSONResponse(
-                status_code=exc.status_code,
-                content={"error": {"message": detail, "type": "mcg_error", "code": None}},
-            )
-        return JSONResponse(status_code=exc.status_code, content={"error": {"message": str(detail)}})
+    app.state.request_log = []
 
     keepalive = TokenKeepAlive(
         fabric,
@@ -122,7 +79,6 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
 
     if cfg.rate_limit.enabled:
         from mcg.api.rate_limit import RateLimitMiddleware
-
         app.add_middleware(RateLimitMiddleware, cfg=cfg.rate_limit)
 
     if cfg.gateway.cors_origins:
@@ -134,15 +90,6 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
             allow_headers=["*"],
         )
 
-    # Root → WebUI redirect
-    from fastapi.responses import RedirectResponse
-
-    @app.get("/", include_in_schema=False)
-    async def root_to_ui():
-        return RedirectResponse(url="/ui")
-
-    app.include_router(openai_router)
-    app.include_router(anthropic_router)
     app.include_router(admin_router)
     app.include_router(ui_router)
 
@@ -150,28 +97,50 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+    @app.get("/", include_in_schema=False)
+    async def root():
+        return RedirectResponse(url="/ui")
+
     @app.get("/health")
     async def health():
         accounts = pool.list_public()
         active = sum(1 for a in accounts if a.get("token_valid") and a.get("status") == "active")
         return {
             "ok": True,
-            "version": "0.2.0",
+            "version": "0.1.0",
             "accounts_total": len(accounts),
             "accounts_active": active,
             "models": len(models),
-            "features": {
-                "openai_chat": True,
-                "anthropic_messages": True,
-                "models_probe": True,
-                "multimodal": True,
-                "tool_execution": cfg.tools.execution,
-            },
             "keepalive": {
                 "enabled": keepalive.enabled,
                 "interval_sec": keepalive.interval_sec,
                 "last": keepalive.last,
             },
+            "ts": int(time.time()),
         }
+
+    @app.get("/v1/models")
+    async def v1_models(_key: str = Depends(require_api_key)):
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": m.id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "m365-copilot",
+                    "metadata": {
+                        "tone": m.tone,
+                        "label": m.label,
+                        "family": m.family,
+                    },
+                }
+                for m in app.state.models
+            ],
+        }
+
+    @app.get("/models")
+    async def models_plain(_key: str = Depends(require_api_key)):
+        return {"models": [m.__dict__ for m in app.state.models]}
 
     return app
