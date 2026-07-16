@@ -127,16 +127,20 @@ def format_image_markdown(urls: list[str], *, proxy_prefix: str | None = None) -
     return "\n".join(lines)
 
 
-def fold_stream_text(answer: str, next_text: str) -> tuple[str, str | None]:
+def fold_stream_text(answer: str, next_text: str, *, final: bool = False) -> tuple[str, str | None]:
     """Merge delta/snapshot text without duplicating prefixes.
 
-    Inspired by cramt foldStreamText: M365 mixes token deltas with full snapshots.
+    M365 mixes token deltas with full snapshots. During live streaming, never emit
+    divergent snapshots because the client has already seen earlier bytes. At the
+    final frame, flush the tail by length so the last characters do not hang when
+    the authoritative snapshot differs only by whitespace/normalization.
     """
     if len(next_text) <= len(answer):
         return answer, None
     if next_text.startswith(answer):
         return next_text, next_text[len(answer) :]
-    # Divergent longer snapshot: adopt for buffer, do not emit non-prefix.
+    if final:
+        return next_text, next_text[len(answer) :]
     return next_text, None
 
 
@@ -339,7 +343,7 @@ class SubstrateClient:
                                 "loading image…",
                                 "loading image...",
                             }:
-                                answer, emit = fold_stream_text(answer, text)
+                                answer, emit = fold_stream_text(answer, text, final=True)
                                 if emit:
                                     yield emit
                         break

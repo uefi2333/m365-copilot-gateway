@@ -60,6 +60,26 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
 
+    started = time.time()
+    first_byte_at: float | None = None
+    chars = 0
+
+    def log_done(status: str, error: str = "") -> None:
+        request.app.state.request_log.append({
+            "ts": int(started),
+            "status": status,
+            "route": "/v1/chat/completions",
+            "model": body.model,
+            "tone": tone,
+            "account": account.id,
+            "stream": body.stream,
+            "chars": chars,
+            "ttfb_ms": int(((first_byte_at or time.time()) - started) * 1000),
+            "total_ms": int((time.time() - started) * 1000),
+            "error": error[:200],
+        })
+        del request.app.state.request_log[:-100]
+
     client = SubstrateClient(
         account.token,
         origin=cfg.substrate.origin,
@@ -68,6 +88,7 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
     )
 
     async def upstream():
+        nonlocal first_byte_at, chars
         try:
             async for part in client.chat_stream(
                 text,
@@ -77,14 +98,19 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
                 is_start_of_session=is_start,
                 custom_instructions=custom_instructions,
             ):
+                if first_byte_at is None:
+                    first_byte_at = time.time()
+                chars += len(part)
                 yield part
             state.sent_count = len(body.messages)
             pool.mark_success(account.id)
+            log_done("ok")
         except Exception as exc:  # noqa: BLE001
             if is_transient_substrate_error(exc):
                 pool.mark_soft_error(account.id)
             else:
                 pool.mark_error(account.id)
+            log_done("error", str(exc))
             raise
 
     if body.stream:
@@ -113,5 +139,13 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
         "created": created,
         "model": body.model,
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "x_m365_tone": tone,
+            "x_m365_account": account.id,
+            "x_m365_ttfb_ms": int(((first_byte_at or time.time()) - started) * 1000),
+            "x_m365_total_ms": int((time.time() - started) * 1000),
+        },
     }
