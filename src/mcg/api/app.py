@@ -16,6 +16,7 @@ from mcg.token.fabric import TokenFabric
 from mcg.token.keepalive import TokenKeepAlive
 
 from .routes_admin import router as admin_router
+from .routes_chat import router as chat_router
 from .routes_ui import router as ui_router
 
 
@@ -60,6 +61,8 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
     app.state.pool = pool
     app.state.models = models
     app.state.request_log = []
+    from .session_pool import SessionPool
+    app.state.chat_sessions = SessionPool()
 
     keepalive = TokenKeepAlive(
         fabric,
@@ -91,6 +94,7 @@ def create_app(config_path: str | Path | None = None, config: AppConfig | None =
         )
 
     app.include_router(admin_router)
+    app.include_router(chat_router)
     app.include_router(ui_router)
 
     static_dir = Path(__file__).resolve().parent.parent / "webui" / "static"

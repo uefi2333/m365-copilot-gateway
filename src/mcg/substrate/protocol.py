@@ -137,12 +137,15 @@ def build_hub_url(
     token = quote(access_token, safe="")
     return (
         f"{WS_BASE}/{oid}@{tid}"
-        f"?ClientRequestId={req}"
+        f"?chatsessionid={req}"
+        f"&clientrequestid={req}"
+        f"&ClientRequestId={req}"
+        f"&XRoutingParameterSessionKey={session_id}"
         f"&X-SessionId={session_id}"
         f"&ConversationId={conversation_id}"
         f"&access_token={token}"
         f"&variants={variants}"
-        f"&source=officeweb&product=Office&agentHost=Bizchat.FullScreen"
+        f"&source=%22officeweb%22&product=Office&agentHost=Bizchat.FullScreen"
         f"&licenseType=Starter&agent=web&scenario=OfficeWebIncludedCopilot"
     )
 

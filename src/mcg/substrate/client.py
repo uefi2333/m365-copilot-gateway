@@ -195,7 +195,7 @@ class SubstrateClient:
         try:
             async with websockets.connect(
                 url,
-                additional_headers={"Origin": self.origin},
+                additional_headers={"Origin": self.origin, "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/126 Safari/537.36"},
                 open_timeout=self.open_timeout_sec,
                 close_timeout=10,
                 max_size=50 * 1024 * 1024,

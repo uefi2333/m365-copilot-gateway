@@ -25,3 +25,11 @@ def test_models_endpoint_and_ui_load(tmp_path):
     assert ui.status_code == 200
     assert "账号" in ui.text
     assert "/v1/models" in ui.text
+
+    chat = c.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer sk-test"},
+        json={"model": "m365-copilot", "messages": [{"role": "user", "content": "hi"}]},
+    )
+    assert chat.status_code == 503
+    assert "no active accounts" in chat.text
