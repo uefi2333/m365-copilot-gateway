@@ -27,10 +27,20 @@ class ChatRequest(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
-def _chunk(completion_id: str, created: int, model: str, content: str = "", finish: str | None = None) -> dict[str, Any]:
-    choice: dict[str, Any] = {"index": 0, "delta": {}, "finish_reason": finish}
+def _chunk(
+    completion_id: str,
+    created: int,
+    model: str,
+    content: str = "",
+    finish: str | None = None,
+    role: str | None = None,
+) -> dict[str, Any]:
+    delta: dict[str, Any] = {}
+    if role:
+        delta["role"] = role
     if content:
-        choice["delta"] = {"content": content}
+        delta["content"] = content
+    choice: dict[str, Any] = {"index": 0, "delta": delta, "finish_reason": finish}
     return {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model, "choices": [choice]}
 
 
@@ -116,11 +126,15 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
     if body.stream:
         async def gen():
             try:
-                yield _sse(_chunk(completion_id, created, body.model, "", None))
+                yield _sse(_chunk(completion_id, created, body.model, "", None, role="assistant"))
                 async for part in upstream():
                     if part:
                         yield _sse(_chunk(completion_id, created, body.model, part, None))
-                yield _sse(_chunk(completion_id, created, body.model, "", "stop"))
+                if chars == 0:
+                    err = {"error": {"message": "upstream returned empty content", "type": "upstream_empty", "code": "m365_empty"}}
+                    yield ("data: " + json.dumps(err, ensure_ascii=False) + "\n\n").encode()
+                else:
+                    yield _sse(_chunk(completion_id, created, body.model, "", "stop"))
                 yield b"data: [DONE]\n\n"
             except SubstrateError as exc:
                 err = {"error": {"message": str(exc), "type": "upstream_error", "code": "m365_substrate"}}
@@ -133,6 +147,8 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
         content = "".join([part async for part in upstream()])
     except SubstrateError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if not content:
+        raise HTTPException(status_code=502, detail="upstream returned empty content")
     return {
         "id": completion_id,
         "object": "chat.completion",
