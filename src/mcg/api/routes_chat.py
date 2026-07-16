@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from mcg.auth.deps import require_api_key
 from mcg.models_catalog import resolve_tone
@@ -19,12 +19,17 @@ router = APIRouter(prefix="/v1", tags=["chat"])
 
 
 class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     model: str = "m365-copilot"
     messages: list[dict[str, Any]] = Field(default_factory=list)
     stream: bool = False
     temperature: float | None = None
     user: str | None = None
     metadata: dict[str, Any] | None = None
+    tools: list[dict[str, Any]] | None = None
+    tool_choice: Any = None
+    parallel_tool_calls: bool | None = None
 
 
 def _chunk(
@@ -66,6 +71,18 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     tone = resolve_tone(body.model, request.app.state.models)
     text, custom_instructions = format_openai_messages(body.messages)
+    if body.tools:
+        tool_names = []
+        for tool in body.tools:
+            fn = tool.get("function") if isinstance(tool, dict) else None
+            if isinstance(fn, dict) and fn.get("name"):
+                tool_names.append(str(fn["name"]))
+        tool_hint = ", ".join(tool_names) or f"{len(body.tools)} tools"
+        text = (
+            f"Available client-side tools are declared but server-side tool execution is not enabled in this gateway layer. "
+            f"Answer the user directly in natural language unless a tool result is already present. "
+            f"Declared tools: {tool_hint}.\n\n" + text
+        )
     is_start = state.sent_count == 0
     completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
@@ -83,6 +100,10 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
             "tone": tone,
             "account": account.id,
             "stream": body.stream,
+            "messages": len(body.messages),
+            "has_tools": bool(body.tools),
+            "tool_choice": str(body.tool_choice)[:80],
+            "content_shape": [type(m.get("content")).__name__ for m in body.messages[-3:]],
             "chars": chars,
             "ttfb_ms": int(((first_byte_at or time.time()) - started) * 1000),
             "total_ms": int((time.time() - started) * 1000),
