@@ -61,6 +61,7 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
     pool = request.app.state.pool
     cfg = request.app.state.config
     sessions = request.app.state.chat_sessions
+    request_model = (body.model or "").strip() or "m365-copilot"
     conv_id = None
     if body.metadata:
         conv_id = body.metadata.get("conversation_id") or body.metadata.get("thread_id")
@@ -69,7 +70,7 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
         account = pool.acquire(sticky_key=state.conversation_id)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    tone = resolve_tone(body.model, request.app.state.models)
+    tone = resolve_tone(request_model, request.app.state.models)
     text, custom_instructions = format_openai_messages(body.messages)
     if body.tools:
         tool_names = []
@@ -96,7 +97,8 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
             "ts": int(started),
             "status": status,
             "route": "/v1/chat/completions",
-            "model": body.model,
+            "model": request_model,
+            "raw_model": body.model,
             "tone": tone,
             "account": account.id,
             "stream": body.stream,
@@ -147,15 +149,15 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
     if body.stream:
         async def gen():
             try:
-                yield _sse(_chunk(completion_id, created, body.model, "", None, role="assistant"))
+                yield _sse(_chunk(completion_id, created, request_model, "", None, role="assistant"))
                 async for part in upstream():
                     if part:
-                        yield _sse(_chunk(completion_id, created, body.model, part, None))
+                        yield _sse(_chunk(completion_id, created, request_model, part, None))
                 if chars == 0:
                     err = {"error": {"message": "upstream returned empty content", "type": "upstream_empty", "code": "m365_empty"}}
                     yield ("data: " + json.dumps(err, ensure_ascii=False) + "\n\n").encode()
                 else:
-                    yield _sse(_chunk(completion_id, created, body.model, "", "stop"))
+                    yield _sse(_chunk(completion_id, created, request_model, "", "stop"))
                 yield b"data: [DONE]\n\n"
             except SubstrateError as exc:
                 err = {"error": {"message": str(exc), "type": "upstream_error", "code": "m365_substrate"}}
@@ -174,7 +176,7 @@ async def chat_completions(body: ChatRequest, request: Request, _key: str = Depe
         "id": completion_id,
         "object": "chat.completion",
         "created": created,
-        "model": body.model,
+        "model": request_model,
         "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
         "usage": {
             "prompt_tokens": 0,
